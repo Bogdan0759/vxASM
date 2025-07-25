@@ -190,6 +190,9 @@ def parse_int3(bytecode: bytes, address: int, prefixes: Prefixes) -> Instruction
     
     return Instruction(address, 1, "int", "3", bytecode[0:1])
 
+def parse_int1(bytecode: bytes, address: int, prefixes: Prefixes) -> Instruction:
+    return Instruction(address, 1, "icebp", "", bytecode[0:1])
+
 def parse_jmp_rel32(bytecode: bytes, address: int, prefixes: Prefixes) -> Instruction | None:
     
     if len(bytecode) < 5: return None
@@ -688,6 +691,7 @@ SINGLE_BYTE_OPCODES = {
     0x90: parse_nop,
     0xC3: parse_ret,
     0xCC: parse_int3,
+    0xF1: parse_int1,
     0xE8: parse_call_rel32,
     0xE9: parse_jmp_rel32,
     0xEB: parse_jmp_rel8,

@@ -7,7 +7,7 @@ from .info_analyzer import ImportedFunction
 
 @dataclasses.dataclass
 class DetectionResult:
-    """Представляет один результат обнаружения анти-отладочной техники."""
+    
     address: int
     name: str
     description: str
@@ -16,7 +16,7 @@ class DetectionResult:
         return f"DetectionResult(address=0x{self.address:x}, name='{self.name}')"
 
 def _find_trap_flag_trick(instructions: List[Instruction]) -> List[DetectionResult]:
-    """Ищет паттерн установки Trap Flag (pushf; or [rsp], 0x100; popf)."""
+    
     results = []
     push_mnemonics = {'pushf', 'pushfd', 'pushfq'}
     pop_mnemonics = {'popf', 'popfd', 'popfq'}
@@ -50,7 +50,7 @@ def _find_trap_flag_trick(instructions: List[Instruction]) -> List[DetectionResu
     return results
 
 def _find_timing_attacks(instructions: List[Instruction]) -> List[DetectionResult]:
-    """Ищет тайминговые атаки, используя пары rdtsc/rdpmc и последующий анализ."""
+    
     results = []
     timing_mnemonics = {'rdtsc', 'rdpmc'}
     timing_indices = [i for i, instr in enumerate(instructions) if instr.mnemonic in timing_mnemonics]
@@ -81,7 +81,7 @@ def _find_timing_attacks(instructions: List[Instruction]) -> List[DetectionResul
     return results
 
 def _find_peb_being_debugged_check(instructions: List[Instruction]) -> List[DetectionResult]:
-    """Ищет паттерн проверки флага BeingDebugged в PEB."""
+    
     results = []
     for i, instr in enumerate(instructions):
         
@@ -101,8 +101,7 @@ def _find_peb_being_debugged_check(instructions: List[Instruction]) -> List[Dete
         for k in range(i + 1, min(i + 6, len(instructions))):
             next_instr = instructions[k]
             
-            # Более надежная проверка для доступа к памяти, например [reg+2], [reg+0x2] и т.д.
-            # Учитывает разное количество пробелов и шестнадцатеричное/десятичное представление.
+            
             pattern = re.compile(rf'\b{re.escape(dest_reg)}\s*\+\s*(?:0x)?2\b', re.IGNORECASE)
             if pattern.search(next_instr.operands):
                 results.append(DetectionResult(
@@ -114,7 +113,7 @@ def _find_peb_being_debugged_check(instructions: List[Instruction]) -> List[Dete
     return results
 
 def _find_peb_ntglobalflag_check(instructions: List[Instruction]) -> List[DetectionResult]:
-    """Ищет паттерн проверки флага NtGlobalFlag в PEB."""
+    
     results = []
     for i, instr in enumerate(instructions):
         
@@ -150,7 +149,7 @@ def _find_peb_ntglobalflag_check(instructions: List[Instruction]) -> List[Detect
     return results
 
 def _find_peb_heap_flags_check(instructions: List[Instruction]) -> List[DetectionResult]:
-    """Ищет паттерн проверки флагов кучи (Heap Flags/ForceFlags) в PEB."""
+    
     results = []
     for i, instr in enumerate(instructions):
         is_peb_load = (
@@ -216,7 +215,7 @@ def _find_manual_isdebuggerpresent(instructions: List[Instruction]) -> List[Dete
         if not is_flag_read:
             continue
 
-        # Надежная проверка чтения флага, например, movzx eax, byte ptr [rax+2]
+        
         flag_read_pattern = re.compile(r'\[\s*(?:rax|eax)\s*\+\s*(?:0x)?2\s*\]', re.IGNORECASE)
         
         is_ret = instr3.mnemonic == 'ret'
@@ -233,7 +232,7 @@ def _find_exception_based_tricks(
     instructions: List[Instruction],
     iat_address_to_func_name: Dict[int, str]
 ) -> List[DetectionResult]:
-    """Ищет трюки, основанные на генерации исключений, например, SetUnhandledExceptionFilter + int3."""
+    
     results = []
     exception_triggers = {'int3', 'ud2'}
 
@@ -260,6 +259,99 @@ def _find_exception_based_tricks(
                 break  
     return results
 
+def _find_standalone_interrupts(instructions: List[Instruction]) -> List[DetectionResult]:
+    
+    results = []
+    interrupt_mnemonics = {'int3', 'icebp'}
+
+    for i, instr in enumerate(instructions):
+        if instr.mnemonic not in interrupt_mnemonics:
+            continue
+
+        if instr.is_error:
+            continue
+
+        is_likely_padding = False
+        if i > 0 and instructions[i-1].mnemonic in interrupt_mnemonics:
+            is_likely_padding = True
+        if i < len(instructions) - 1 and instructions[i+1].mnemonic in interrupt_mnemonics:
+            is_likely_padding = True
+        
+        if not is_likely_padding:
+            if instr.mnemonic == 'icebp':
+                name = "ICEBP Interrupt (INT 1)"
+                desc = "Обнаружена инструкция INT 1, которая вызывает отладочное прерывание."
+            else: 
+                name = "Software Breakpoint (INT 3)"
+                desc = "Обнаружена инструкция INT 3, которая может использоваться для проверки наличия отладчика."
+            
+            results.append(DetectionResult(instr.address, name, desc))
+            
+    return results
+
+def _find_cpuid_hypervisor_check(instructions: List[Instruction]) -> List[DetectionResult]:
+    
+    results = []
+    for i, instr in enumerate(instructions):
+        
+        is_hypervisor_leaf = (
+            instr.mnemonic == 'mov' and
+            'eax' in instr.operands.lower() and
+            '0x40000000' in instr.operands.lower()
+        )
+        if not is_hypervisor_leaf:
+            continue
+
+        
+        for k in range(i + 1, min(i + 4, len(instructions))):
+            if instructions[k].mnemonic == 'cpuid':
+                results.append(DetectionResult(
+                    instr.address,
+                    "CPUID Hypervisor Check",
+                    "Обнаружен запрос к CPUID с 'листом' 0x40000000 для получения информации о гипервизоре."
+                ))
+                break
+    return results
+
+def _find_sidt_check(instructions: List[Instruction]) -> List[DetectionResult]:
+    results = []
+    for instr in instructions:
+        if instr.mnemonic == 'sidt':
+            results.append(DetectionResult(
+                instr.address,
+                "SIDT Instruction Check",
+                "Обнаружена инструкция SIDT, которая может использоваться для определения работы в виртуальной машине (Red Pill)."
+            ))
+    return results
+
+def _find_ntqueryinformationprocess_checks(
+    instructions: List[Instruction],
+    iat_address_to_func_name: Dict[int, str]
+) -> List[DetectionResult]:
+    results = []
+    
+    
+    debug_classes = { 7: "ProcessDebugPort", 0x1e: "ProcessDebugObjectHandle", 0x1f: "ProcessDebugFlags" }
+
+    ntqip_call_indices = [i for i, instr in enumerate(instructions) if instr.mnemonic == 'call' and iat_address_to_func_name.get(int(instr.operands, 16) if instr.operands.startswith('0x') else 0) == 'ntqueryinformationprocess']
+
+    for call_index in ntqip_call_indices:
+        
+        for k in range(max(0, call_index - 15), call_index):
+            instr = instructions[k]
+            
+            match = re.search(r'(?:mov|push)\s+.*[,\s]\s*(0x[0-9a-f]+|[0-9]+)\b', instr.operands, re.IGNORECASE)
+            if match:
+                try:
+                    val = int(match.group(1), 0) 
+                    if val in debug_classes:
+                        class_name = debug_classes[val]
+                        results.append(DetectionResult(instr.address, f"NtQueryInformationProcess Check ({class_name})", f"Обнаружен вызов NtQueryInformationProcess с классом {class_name} для проверки отладчика."))
+                        break 
+                except (ValueError, TypeError):
+                    continue
+    return results
+
 def analyze_anti_debug(
     instructions: List[Instruction],
     imports: Optional[Dict[str, List[ImportedFunction]]]
@@ -277,7 +369,7 @@ def analyze_anti_debug(
         "checkremotedebuggerpresent": ("CheckRemoteDebuggerPresent Check", "Проверка наличия удаленного отладчика через API."),
         "outputdebugstringa": ("OutputDebugString Timing Check", "Может использоваться для замера времени выполнения и обнаружения отладчика."),
         "outputdebugstringw": ("OutputDebugString Timing Check", "Может использоваться для замера времени выполнения и обнаружения отладчика."),
-        "ntqueryinformationprocess": ("NtQueryInformationProcess Check", "Может использоваться для получения отладочного порта процесса."),
+        
         "ntquerysysteminformation": ("NtQuerySystemInformation Check", "Может использоваться для обнаружения отладчика ядра (Kernel Debugger)."),
         "closehandle": ("Invalid Handle Check (CloseHandle)", "Вызов CloseHandle с невалидным хендлом вызывает исключение, которое обрабатывается иначе под отладчиком."),
         "setunhandledexceptionfilter": ("SetUnhandledExceptionFilter Hook", "Может использоваться для перехвата исключений и обнаружения отладчика."),
@@ -287,10 +379,6 @@ def analyze_anti_debug(
     for dll, funcs in imports.items():
         for func in funcs:
             iat_address_to_func_name[func.address] = func.name.lower()
-
-    suspicious_single_instructions = {
-        b'\xf1': ("ICEBP Interrupt (INT1)", "Инструкция INT1, вызывает отладочное прерывание, которое перехватывается только отладчиком."),
-    }
 
     for i, instr in enumerate(instructions):
         
@@ -303,11 +391,6 @@ def analyze_anti_debug(
                     results.append(DetectionResult(instr.address, name, desc))
             except (ValueError, TypeError):
                 pass
-
-        
-        if instr.bytes in suspicious_single_instructions:
-            name, desc = suspicious_single_instructions[instr.bytes]
-            results.append(DetectionResult(instr.address, name, desc))
 
         
         if instr.mnemonic == 'in' and 'eax, dx' in instr.operands.lower().replace(' ', ''):
@@ -357,6 +440,10 @@ def analyze_anti_debug(
     results.extend(_find_peb_heap_flags_check(instructions))
     results.extend(_find_manual_isdebuggerpresent(instructions))
     results.extend(_find_exception_based_tricks(instructions, iat_address_to_func_name))
+    results.extend(_find_standalone_interrupts(instructions))
+    results.extend(_find_cpuid_hypervisor_check(instructions))
+    results.extend(_find_sidt_check(instructions))
+    results.extend(_find_ntqueryinformationprocess_checks(instructions, iat_address_to_func_name))
     
     
     unique_results_dict = { (r.address, r.name): r for r in results }

@@ -1306,7 +1306,7 @@ class XrefsWindow(tk.Toplevel):
     def __init__(self, parent: DisassemblerApp, target_addr: int, source_addrs: Set[int], addr_to_instr: Dict[int, Instruction], functions: List[FoundFunction]):
         super().__init__(parent)
         self.parent = parent
-        self.title(self.parent._("xrefs_for_addr_title").format(target_addr=target_addr))
+        self.title(self.parent._("xrefs_for_addr_title").format(address=target_addr))
         self.geometry("800x400")
         self.transient(parent)
         self.grab_set()
