@@ -1,5 +1,5 @@
 {
-    "show_padding": false,
+    "show_padding": true,
     "dark_theme": false,
     "show_bytes": true,
     "uppercase_mnemonics": true,
@@ -14,6 +14,7 @@
     "analyze_anti_debug": true,
     "auto_section_search": true,
     "analyze_all_sections_for_compiler": true,
+    "language": "ru",
     "font_family": "Courier New",
     "font_size": 10
 }

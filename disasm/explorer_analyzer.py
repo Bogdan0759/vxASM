@@ -104,6 +104,18 @@ def _parse_pyinstaller_archive(pe: "pefile.PE") -> Optional[ExplorerNode]:
         
         return None
 
+def _analyze_upx(pe: "pefile.PE", file_info: Optional["FileInfo"] = None) -> Optional[ExplorerNode]:
+    """Анализирует файл на наличие признаков упаковщика UPX."""
+    if file_info and "UPX" in file_info.packer:
+        return ExplorerNode(name="UPX Packed File", node_type='directory')
+    
+    upx_sections = [s.Name.decode(errors='ignore').strip('\x00') for s in pe.sections if s.Name.startswith(b'UPX')]
+    if upx_sections:
+        return ExplorerNode(name=f"UPX Packed File (секции: {', '.join(upx_sections)})", node_type='directory')
+
+    return None
+
+
 def _analyze_other_packers(pe: "pefile.PE") -> Optional[ExplorerNode]:
     """Анализирует файл на наличие признаков других популярных упаковщиков."""
     
