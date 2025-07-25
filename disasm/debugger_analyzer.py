@@ -1,5 +1,6 @@
 import dataclasses
 from typing import List, Dict, Optional
+import re
 
 from .instruction import Instruction
 from .info_analyzer import ImportedFunction
@@ -100,8 +101,10 @@ def _find_peb_being_debugged_check(instructions: List[Instruction]) -> List[Dete
         for k in range(i + 1, min(i + 6, len(instructions))):
             next_instr = instructions[k]
             
-            expected_operand_part = f'[{dest_reg}+2]'
-            if expected_operand_part in next_instr.operands.replace(' ', ''):
+            # Более надежная проверка для доступа к памяти, например [reg+2], [reg+0x2] и т.д.
+            # Учитывает разное количество пробелов и шестнадцатеричное/десятичное представление.
+            pattern = re.compile(rf'\b{re.escape(dest_reg)}\s*\+\s*(?:0x)?2\b', re.IGNORECASE)
+            if pattern.search(next_instr.operands):
                 results.append(DetectionResult(
                     instr.address,
                     "PEB BeingDebugged Check",
@@ -208,14 +211,17 @@ def _find_manual_isdebuggerpresent(instructions: List[Instruction]) -> List[Dete
         
         is_flag_read = (
             instr2.mnemonic == 'movzx' and
-            ('eax' in instr2.operands or 'rax' in instr2.operands) and
-            ('+2]' in instr2.operands.replace(' ', ''))
+            ('eax' in instr2.operands or 'rax' in instr2.operands)
         )
+        if not is_flag_read:
+            continue
 
+        # Надежная проверка чтения флага, например, movzx eax, byte ptr [rax+2]
+        flag_read_pattern = re.compile(r'\[\s*(?:rax|eax)\s*\+\s*(?:0x)?2\s*\]', re.IGNORECASE)
         
         is_ret = instr3.mnemonic == 'ret'
 
-        if is_flag_read and is_ret:
+        if flag_read_pattern.search(instr2.operands) and is_ret:
              results.append(DetectionResult(
                 instr1.address,
                 "Manual IsDebuggerPresent",
