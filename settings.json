@@ -1,0 +1,19 @@
+{
+    "show_padding": false,
+    "dark_theme": false,
+    "show_bytes": true,
+    "uppercase_mnemonics": true,
+    "use_prologue_heuristic": true,
+    "use_separator_heuristic": true,
+    "use_padding_heuristic": true,
+    "analyze_basic_blocks": true,
+    "analyze_xrefs": true,
+    "analyze_variables": true,
+    "analyze_classes": true,
+    "show_errors_highlight": true,
+    "analyze_anti_debug": true,
+    "auto_section_search": true,
+    "analyze_all_sections_for_compiler": true,
+    "font_family": "Courier New",
+    "font_size": 10
+}
