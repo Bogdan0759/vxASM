@@ -360,6 +360,13 @@ def find_functions(
 
                 blocks.append(BasicBlock(start_address=block_start_addr, end_address=last_instr_addr, has_errors=block_has_errors, successors=successors, terminator=terminator))
 
+                
+                if terminator and terminator.mnemonic == 'jmp':
+                    try:
+                        int(terminator.operands, 16)
+                    except (ValueError, TypeError):
+                        break 
+
         found_functions_with_blocks.append(FoundFunction(address=start_addr, name=name, blocks=blocks, has_errors=function_has_errors, is_stub=is_stub))
 
     return found_functions_with_blocks
