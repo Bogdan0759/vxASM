@@ -1,8 +1,12 @@
 import dataclasses
 import re
+import struct
 from .instruction import Instruction
-from typing import List, Set, Dict, Optional
+from typing import List, Set, Dict, Optional, TYPE_CHECKING
 
+if TYPE_CHECKING:
+    import pefile
+    
 @dataclasses.dataclass
 class BasicBlock:
     
@@ -166,6 +170,54 @@ def _find_after_padding_blocks(instructions: List[Instruction]) -> Set[int]:
             
     return entry_points
 
+def _resolve_jump_table(
+    jmp_instr: Instruction,
+    pe: "pefile.PE",
+) -> List[int]:
+    
+    if not pe:
+        return []
+
+    
+    match = re.search(r'(0x[0-9a-fA-F]{5,}|[a-fA-F0-9]{5,}h)', jmp_instr.operands)
+    if not match:
+        return []
+
+    try:
+        table_base_addr = int(match.group(1).replace('h', ''), 16)
+    except (ValueError, IndexError):
+        return []
+
+    image_base = pe.OPTIONAL_HEADER.ImageBase
+    is_64bit = pe.FILE_HEADER.Machine == pefile.MACHINE_TYPE['IMAGE_FILE_MACHINE_AMD64']
+    ptr_size, unpack_fmt = (8, '<Q') if is_64bit else (4, '<I')
+
+    try:
+        table_rva = table_base_addr - image_base
+        
+        table_data = pe.get_data(table_rva, 256 * ptr_size)
+    except Exception:
+        return []
+
+    targets = []
+    text_section = next((s for s in pe.sections if s.Name.startswith(b'.text')), None)
+    if not text_section:
+        return []
+    code_rva_range = (text_section.VirtualAddress, text_section.VirtualAddress + text_section.Misc_VirtualSize)
+
+    for i in range(0, len(table_data), ptr_size):
+        if i + ptr_size > len(table_data):
+            break
+        target_addr = struct.unpack(unpack_fmt, table_data[i:i+ptr_size])[0]
+        target_rva = target_addr - image_base
+
+        if code_rva_range[0] <= target_rva < code_rva_range[1]:
+            targets.append(target_addr)
+        else:
+            break
+    
+    return targets if len(targets) >= 3 else []
+
 def find_xrefs(
     instructions: List[Instruction],
     valid_addr_range: Optional[tuple[int, int]] = None
@@ -211,6 +263,7 @@ def flag_consecutive_errors(instructions: List[Instruction], threshold: int = 3)
 
 def find_functions(
     instructions: List[Instruction],
+    pe: Optional["pefile.PE"] = None,
     entry_point: Optional[int] = None,
     user_labels: Optional[Dict[int, str]] = None,
     exports: Optional[Dict[int, str]] = None,
@@ -360,12 +413,20 @@ def find_functions(
 
                 blocks.append(BasicBlock(start_address=block_start_addr, end_address=last_instr_addr, has_errors=block_has_errors, successors=successors, terminator=terminator))
 
-                
+               
                 if terminator and terminator.mnemonic == 'jmp':
+                    is_indirect = False
                     try:
                         int(terminator.operands, 16)
                     except (ValueError, TypeError):
-                        break 
+                        is_indirect = True
+                    
+                    if is_indirect:
+                        jump_table_targets = _resolve_jump_table(terminator, pe)
+                        if jump_table_targets:
+                            successors.extend(jump_table_targets)
+                        else:
+                            break 
 
         found_functions_with_blocks.append(FoundFunction(address=start_addr, name=name, blocks=blocks, has_errors=function_has_errors, is_stub=is_stub))
 
