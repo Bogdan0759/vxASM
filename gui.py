@@ -12,15 +12,17 @@ from disasm import (
     find_functions, FoundFunction, find_xrefs, flag_consecutive_errors,
     find_classes, FoundClass, SecurityFeatures, SectionInfo, is_dotnet_assembly,
     analyze_pe_info, FileInfo, ImportedFunction,
-    analyze_anti_debug, DetectionResult,
+    analyze_anti_debug, DetectionResult, ScanResult,
     analyze_structure, ExplorerNode,
     find_variables, FoundVariable
 )
 
+from utils.progress import ProgressDialog, AnalysisWorker
+from utils.hex_view import HexView
+from utils.string_view import StringView
+
 class ScrollableNotebook(ttk.Frame):
-    """
-    A custom ttk.Notebook-like widget with horizontally scrollable tabs.
-    """
+    
     def __init__(self, master, **kwargs):
         super().__init__(master, **kwargs)
 
@@ -107,6 +109,7 @@ class DisassemblerApp(tk.Tk):
         self.instructions: list[Instruction] = []
         self.functions: list[FoundFunction] = []
         self.classes: list[FoundClass] = []
+        self.scan_results: list[ScanResult] = []
         self.variables: list[FoundVariable] = []
         self.anti_debug_results: list[DetectionResult] = []
         self.file_info: FileInfo | None = None
@@ -122,6 +125,8 @@ class DisassemblerApp(tk.Tk):
         self.address_to_instruction: Dict[int, Instruction] = {}
         self.line_to_instruction: Dict[str, Instruction] = {}
         
+        self.strings_view_widget: Optional[StringView] = None
+        self.hex_view_widget: Optional[HexView] = None
         self.colors = {}
         self.address_to_line: dict[int, str] = {}
 
@@ -140,89 +145,106 @@ class DisassemblerApp(tk.Tk):
 
         self.main_pane = tk.PanedWindow(self, orient=tk.HORIZONTAL, sashrelief=tk.RAISED)
         self.main_pane.pack(expand=True, fill=tk.BOTH, padx=5, pady=5)
-
+        
         self.left_notebook = ScrollableNotebook(self.main_pane)
 
-        functions_tab = ttk.Frame(self.left_notebook) # This frame will be added to the notebook
-        self.left_notebook.add(functions_tab, text=_("functions_tab"))
+        if self.settings.get("component_functions_enabled", True):
+            functions_tab = ttk.Frame(self.left_notebook)
+            self.left_notebook.add(functions_tab, text=_("functions_tab"))
+            self.functions_tree = ttk.Treeview(functions_tab, show="tree headings", columns=("name",))
+            self.functions_tree.heading("#0", text=_("address_col"))
+            self.functions_tree.heading("name", text=_("name_col"))
+            self.functions_tree.column("#0", width=100, stretch=tk.NO, anchor='w')
+            self.functions_tree.column("name", anchor='w')
+            self.functions_tree.pack(expand=True, fill=tk.BOTH)
+            self.functions_tree.bind("<<TreeviewSelect>>", self._on_function_select)
+            self.functions_tree.bind("<Button-3>", self._show_function_context_menu)
+            self.function_context_menu = tk.Menu(self, tearoff=0)
+            self.function_context_menu.add_command(label=_("rename_menu"), command=self._rename_function)
 
-        self.functions_tree = ttk.Treeview(functions_tab, show="tree headings", columns=("name",))
-        self.functions_tree.heading("#0", text=_("address_col"))
-        self.functions_tree.heading("name", text=_("name_col"))
-        self.functions_tree.column("#0", width=100, stretch=tk.NO, anchor='w')
-        self.functions_tree.column("name", anchor='w')
-        self.functions_tree.pack(expand=True, fill=tk.BOTH)
-        self.functions_tree.bind("<<TreeviewSelect>>", self._on_function_select)
-        self.functions_tree.bind("<Button-3>", self._show_function_context_menu)
-        self.function_context_menu = tk.Menu(self, tearoff=0)
-        self.function_context_menu.add_command(label=_("rename_menu"), command=self._rename_function)
+        if self.settings.get("component_blocks_enabled", True):
+            blocks_tab = ttk.Frame(self.left_notebook)
+            self.left_notebook.add(blocks_tab, text=_("blocks_tab"))
+            self.blocks_tree = ttk.Treeview(blocks_tab, show="tree")
+            self.blocks_tree.pack(expand=True, fill=tk.BOTH)
+            self.blocks_tree.bind("<Double-1>", self._on_basic_block_select)
 
-        blocks_tab = ttk.Frame(self.left_notebook)
-        self.left_notebook.add(blocks_tab, text=_("blocks_tab"))
-        self.blocks_tree = ttk.Treeview(blocks_tab, show="tree")
-        self.blocks_tree.pack(expand=True, fill=tk.BOTH)
-        self.blocks_tree.bind("<Double-1>", self._on_basic_block_select)
+        if self.settings.get("component_classes_enabled", True):
+            classes_tab = ttk.Frame(self.left_notebook)
+            self.left_notebook.add(classes_tab, text=_("classes_tab"))
+            self.classes_tree = ttk.Treeview(classes_tab, show="tree headings", columns=("address",))
+            self.classes_tree.heading("#0", text=_("class_name_col"))
+            self.classes_tree.heading("address", text=_("address_col"))
+            self.classes_tree.column("#0", anchor='w')
+            self.classes_tree.column("address", width=120, stretch=tk.NO, anchor='w')
+            self.classes_tree.pack(expand=True, fill=tk.BOTH)
+            self.classes_tree.bind("<<TreeviewSelect>>", self._on_class_select)
 
-        classes_tab = ttk.Frame(self.left_notebook)
-        self.left_notebook.add(classes_tab, text=_("classes_tab"))
+        if self.settings.get("component_variables_enabled", True):
+            variables_tab = ttk.Frame(self.left_notebook)
+            self.left_notebook.add(variables_tab, text=_("variables_tab"))
+            self.variables_tree = ttk.Treeview(variables_tab, show="headings", columns=("address", "type", "value"))
+            self.variables_tree.heading("address", text=_("address_col"))
+            self.variables_tree.heading("type", text=_("type_col"))
+            self.variables_tree.heading("value", text=_("value_col"))
+            self.variables_tree.column("address", width=120, stretch=tk.NO, anchor='w')
+            self.variables_tree.column("type", width=80, stretch=tk.NO, anchor='w')
+            self.variables_tree.column("value", anchor='w')
+            self.variables_tree.pack(expand=True, fill=tk.BOTH)
+            self.variables_tree.bind("<Double-1>", self._on_variable_select)
 
-        self.classes_tree = ttk.Treeview(classes_tab, show="tree headings", columns=("address",))
-        self.classes_tree.heading("#0", text=_("class_name_col"))
-        self.classes_tree.heading("address", text=_("address_col"))
-        self.classes_tree.column("#0", anchor='w')
-        self.classes_tree.column("address", width=120, stretch=tk.NO, anchor='w')
-        self.classes_tree.pack(expand=True, fill=tk.BOTH)
-        self.classes_tree.bind("<<TreeviewSelect>>", self._on_class_select)
+        if self.settings.get("component_signatures_enabled", True):
+            signatures_tab = ttk.Frame(self.left_notebook)
+            self.left_notebook.add(signatures_tab, text=_("signatures_tab"))
+            self.signatures_tree = ttk.Treeview(signatures_tab, show="headings", columns=("address", "type", "name"))
+            self.signatures_tree.heading("address", text=self._("address_col"))
+            self.signatures_tree.heading("type", text=self._("type_col"))
+            self.signatures_tree.heading("name", text=self._("name_col"))
+            self.signatures_tree.column("address", width=120, stretch=tk.NO, anchor='w')
+            self.signatures_tree.column("type", width=80, stretch=tk.NO, anchor='w')
+            self.signatures_tree.column("name", anchor='w')
+            self.signatures_tree.pack(expand=True, fill=tk.BOTH)
+            self.signatures_tree.bind("<Double-1>", self._on_signature_select)
 
-        
-        variables_tab = ttk.Frame(self.left_notebook)
-        self.left_notebook.add(variables_tab, text=_("variables_tab"))
+        if self.settings.get("component_strings_enabled", True):
+            strings_tab = ttk.Frame(self.left_notebook)
+            self.left_notebook.add(strings_tab, text=_("strings_tab"))
+            self.strings_view_frame = strings_tab
+            self.strings_view_widget: Optional[StringView] = None
 
-        self.variables_tree = ttk.Treeview(variables_tab, show="headings", columns=("address", "type", "value"))
-        self.variables_tree.heading("address", text=_("address_col"))
-        self.variables_tree.heading("type", text=_("type_col"))
-        self.variables_tree.heading("value", text=_("value_col"))
-        self.variables_tree.column("address", width=120, stretch=tk.NO, anchor='w')
-        self.variables_tree.column("type", width=80, stretch=tk.NO, anchor='w')
-        self.variables_tree.column("value", anchor='w')
-        self.variables_tree.pack(expand=True, fill=tk.BOTH)
-        self.variables_tree.bind("<Double-1>", self._on_variable_select)
+        if self.settings.get("component_info_enabled", True):
+            info_tab = ttk.Frame(self.left_notebook)
+            self.left_notebook.add(info_tab, text=_("info_tab"))
+            self.info_text_area = scrolledtext.ScrolledText(info_tab, wrap=tk.WORD, relief=tk.FLAT, bd=0)
+            self.info_text_area.pack(expand=True, fill=tk.BOTH, padx=2, pady=2)
+            self.info_text_area.config(state=tk.DISABLED)
 
-        info_tab = ttk.Frame(self.left_notebook)
-        self.left_notebook.add(info_tab, text=_("info_tab"))
-        
-        self.info_text_area = scrolledtext.ScrolledText(info_tab, wrap=tk.WORD, relief=tk.FLAT, bd=0)
-        self.info_text_area.pack(expand=True, fill=tk.BOTH, padx=2, pady=2)
-        self.info_text_area.config(state=tk.DISABLED)
+        if self.settings.get("component_imports_enabled", True):
+            imports_main_tab = ttk.Frame(self.left_notebook)
+            self.left_notebook.add(imports_main_tab, text=_("imports_tab"))
+            imp_exp_notebook = ttk.Notebook(imports_main_tab)
+            imp_exp_notebook.pack(expand=True, fill=tk.BOTH)
+            imports_sub_tab = ttk.Frame(imp_exp_notebook)
+            imp_exp_notebook.add(imports_sub_tab, text=_("imports_tab"))
+            self.imports_tree = ttk.Treeview(imports_sub_tab, show="tree")
+            self.imports_tree.bind("<Double-1>", self._on_import_select)
+            self.imports_tree.pack(expand=True, fill=tk.BOTH)
+            exports_sub_tab = ttk.Frame(imp_exp_notebook)
+            imp_exp_notebook.add(exports_sub_tab, text=_("exports_tab"))
+            self.exports_tree = ttk.Treeview(exports_sub_tab, show="tree")
+            self.exports_tree.heading("#0", text=_("addr_name_col"))
+            self.exports_tree.pack(expand=True, fill=tk.BOTH)
 
-        imports_main_tab = ttk.Frame(self.left_notebook)
-        self.left_notebook.add(imports_main_tab, text=_("imports_tab"))
-
-        imp_exp_notebook = ttk.Notebook(imports_main_tab)
-        imp_exp_notebook.pack(expand=True, fill=tk.BOTH)
-
-        imports_sub_tab = ttk.Frame(imp_exp_notebook)
-        imp_exp_notebook.add(imports_sub_tab, text=_("imports_tab"))
-        self.imports_tree = ttk.Treeview(imports_sub_tab, show="tree")
-        self.imports_tree.bind("<Double-1>", self._on_import_select)
-        self.imports_tree.pack(expand=True, fill=tk.BOTH)
-
-        exports_sub_tab = ttk.Frame(imp_exp_notebook)
-        imp_exp_notebook.add(exports_sub_tab, text=_("exports_tab"))
-        self.exports_tree = ttk.Treeview(exports_sub_tab, show="tree")
-        self.exports_tree.heading("#0", text=_("addr_name_col"))
-        self.exports_tree.pack(expand=True, fill=tk.BOTH)
-
-        explorer_tab = ttk.Frame(self.left_notebook)
-        self.left_notebook.add(explorer_tab, text=_("explorer_tab"))
-        self.explorer_tree = ttk.Treeview(explorer_tab, show="tree")
-        self.explorer_context_menu = tk.Menu(self, tearoff=0)
-        self.explorer_context_menu.add_command(label=_("extract_menu"), command=self._export_from_explorer, state=tk.DISABLED)
-        self.explorer_tree.bind("<Button-3>", self._show_explorer_context_menu)
-        self.explorer_tree.bind("<Double-1>", self._on_explorer_double_click)
-        self._selected_explorer_node: Optional[ExplorerNode] = None
-
-        self.explorer_tree.pack(expand=True, fill=tk.BOTH)
+        if self.settings.get("component_explorer_enabled", True):
+            explorer_tab = ttk.Frame(self.left_notebook)
+            self.left_notebook.add(explorer_tab, text=_("explorer_tab"))
+            self.explorer_tree = ttk.Treeview(explorer_tab, show="tree")
+            self.explorer_context_menu = tk.Menu(self, tearoff=0)
+            self.explorer_context_menu.add_command(label=_("extract_menu"), command=self._export_from_explorer, state=tk.DISABLED)
+            self.explorer_tree.bind("<Button-3>", self._show_explorer_context_menu)
+            self.explorer_tree.bind("<Double-1>", self._on_explorer_double_click)
+            self._selected_explorer_node: Optional[ExplorerNode] = None
+            self.explorer_tree.pack(expand=True, fill=tk.BOTH)
 
         self.main_pane.add(self.left_notebook, width=300, minsize=200)
         self._create_right_panel()
@@ -372,8 +394,18 @@ class DisassemblerApp(tk.Tk):
             "analyze_classes": True,
             "show_errors_highlight": True,
             "analyze_anti_debug": False,
+            "analyze_signatures": True,
             "auto_section_search": True,
             "analyze_all_sections_for_compiler": True,
+            "component_functions_enabled": True,
+            "component_blocks_enabled": True,
+            "component_classes_enabled": True,
+            "component_variables_enabled": True,
+            "component_signatures_enabled": True,
+            "component_strings_enabled": True,
+            "component_info_enabled": True,
+            "component_imports_enabled": True,
+            "component_explorer_enabled": True,
             "language": "ru",
         }
 
@@ -461,11 +493,17 @@ class DisassemblerApp(tk.Tk):
             messagebox.showinfo(self._("search_title"), self._("search_no_match").format(query=query), parent=self)
 
     def _create_right_panel(self):
-        listing_frame = ttk.Frame(self.main_pane)
-        self.text_area = scrolledtext.ScrolledText(listing_frame, wrap=tk.NONE)
+        self.right_notebook = ttk.Notebook(self.main_pane)
+
+        listing_frame = ttk.Frame(self.right_notebook)
+        self.text_area = scrolledtext.ScrolledText(listing_frame, wrap=tk.NONE, state=tk.DISABLED)
         self.text_area.pack(expand=True, fill=tk.BOTH)
-        self.text_area.config(state=tk.DISABLED)
-        self.main_pane.add(listing_frame, minsize=400)
+        self.right_notebook.add(listing_frame, text=self._("listing_tab"))
+
+        self.hex_view_frame = ttk.Frame(self.right_notebook)
+        self.right_notebook.add(self.hex_view_frame, text=self._("hex_view_tab"))
+
+        self.main_pane.add(self.right_notebook, minsize=400)
 
     def open_file(self):
         filepath = filedialog.askopenfilename(
@@ -488,11 +526,11 @@ class DisassemblerApp(tk.Tk):
             self.pe_object = None
             return
         self._disassemble_and_analyze()
-
+    
     def _disassemble_and_analyze(self):
         if not self.pe_object:
             return
-
+    
         if self.settings.get("auto_section_search", True):
             code_section = None
             entry_point_rva = 0
@@ -501,7 +539,7 @@ class DisassemblerApp(tk.Tk):
                 code_section = self.pe_object.get_section_by_rva(entry_point_rva)
             except (AttributeError, TypeError):
                 pass
-
+    
             if not code_section:
                 messagebox.showwarning(
                     self._("unusual_entry_point_title"),
@@ -515,10 +553,8 @@ class DisassemblerApp(tk.Tk):
             dialog = SectionSelectionWindow(self, self.pe_object)
             self.wait_window(dialog) # Ждем закрытия диалога
             code_section = dialog.selected_section
-
+    
         if not code_section:
-            # Если автоматический поиск не дал результатов, показываем ошибку.
-            # Если ручной - пользователь просто закрыл окно, ничего не делаем.
             if self.settings.get("auto_section_search", True):
                 messagebox.showerror("Критическая ошибка", "Не удалось найти ни одной исполняемой секции в файле. Анализ невозможен.")
             return
@@ -530,93 +566,122 @@ class DisassemblerApp(tk.Tk):
                 f"Секция '{section_name_str}', содержащая точку входа, не помечена как исполняемая. "
                 "Анализ может быть некорректным."
             )
-
+    
         self.section_name = section_name_str
         self.base_address = self.pe_object.OPTIONAL_HEADER.ImageBase + code_section.VirtualAddress
         self.title(f"Vexapay Disassembler - {os.path.basename(self.current_filepath)} [{section_name_str}]")
-
-        # Проверяем, является ли файл .NET сборкой, и пропускаем нативный дизассемблер
+    
         if self.pe_object and is_dotnet_assembly(self.pe_object):
             self.instructions = []
         else:
             bytecode = code_section.get_data()
             dis = Disassembler(bytecode, base_address=self.base_address)
             self.instructions = dis.disassemble()
-
-        # Новый шаг: интеллектуальный анализ ошибок.
+    
         flag_consecutive_errors(self.instructions)
         self.address_to_instruction = {instr.address: instr for instr in self.instructions}
+    
+        self._start_async_analysis()
 
-        self._run_analysis_and_populate_views()
-
-    def _run_analysis_and_populate_views(self):
-        """Запускает анализ и заполняет все представления (деревья, листинг)."""
-        if not self.pe_object or not self.instructions:
+    def _start_async_analysis(self):
+        
+        if not self.pe_object:
+            return
+        
+        if not self.instructions:
+            self._populate_views_with_results()
             return
 
-        # --- Анализ ---
-        analyze_all_sections = self.settings.get("analyze_all_sections_for_compiler", True)
-        self.file_info = analyze_pe_info(self.pe_object, analyze_all_sections=analyze_all_sections)
-        self.file_structure = analyze_structure(self.pe_object, self.file_info)
-
-        if self.settings.get("analyze_anti_debug", False):
-            self.anti_debug_results = analyze_anti_debug(
-                self.instructions,
-                self.file_info.imports if self.file_info else None
-            )
-        else:
-            self.anti_debug_results = []
-
-        if self.settings.get("analyze_xrefs", True):
-            valid_addr_min = self.pe_object.OPTIONAL_HEADER.ImageBase
-            valid_addr_max = valid_addr_min + self.pe_object.OPTIONAL_HEADER.SizeOfImage
-            self.xrefs = find_xrefs(self.instructions, (valid_addr_min, valid_addr_max))
-        else:
-            self.xrefs = {}
-
-        entry_point_va = 0
-        try:
-            entry_point_va = self.pe_object.OPTIONAL_HEADER.ImageBase + self.pe_object.OPTIONAL_HEADER.AddressOfEntryPoint
-        except (AttributeError, TypeError):
-            pass
-
-        self.functions = find_functions(
-            self.instructions,
-            entry_point=entry_point_va if entry_point_va != 0 else None,
-            user_labels=self.user_labels,
-            exports=self.file_info.exports if self.file_info else None,
-            use_prologues=self.settings.get("use_prologue_heuristic", True),
-            use_separators=self.settings.get("use_separator_heuristic", True),
-            use_padding=self.settings.get("use_padding_heuristic", True),
-            analyze_blocks=self.settings.get("analyze_basic_blocks", True),
+        self.analysis_worker = AnalysisWorker(
+            pe=self.pe_object,
+            instructions=self.instructions,
+            settings=self.settings,
+            user_labels=self.user_labels
         )
+        self.analysis_worker.start()
+        ProgressDialog(self, self.analysis_worker)
+
+    def on_analysis_complete(self, results: dict):
+        
+        if not results:
+            return
+
+        self.file_info = results.get("file_info")
+        self.file_structure = results.get("file_structure")
+        self.anti_debug_results = results.get("anti_debug_results", [])
+        self.xrefs = results.get("xrefs", {})
+        self.functions = results.get("functions", [])
+        self.classes = results.get("classes", [])
+        self.scan_results = results.get("scan_results", [])
+        self.variables = results.get("variables", [])
         self.function_map = {f.address: f for f in self.functions}
 
-        if self.settings.get("analyze_classes", True):
-            self.classes = find_classes(self.pe_object, self.file_info)
-        else:
-            self.classes = []
+        self._populate_views_with_results()
 
-        if self.settings.get("analyze_variables", True):
-            self.variables = find_variables(self.instructions, self.pe_object)
-        else:
-            self.variables = []
+    def _populate_hex_view(self):
+        
+        if self.hex_view_widget:
+            self.hex_view_widget.destroy()
+            self.hex_view_widget = None
 
+        if not self.pe_object:
+            return
+
+        file_data = self.pe_object.__data__
+        listing_font = self.text_area.cget("font")
+        
+        self.hex_view_widget = HexView(
+            self.hex_view_frame,
+            file_data=file_data,
+            colors=self.colors,
+            font_info=listing_font
+        )
+        self.hex_view_widget.pack(expand=True, fill=tk.BOTH)
+
+    def _populate_strings_view(self):
+        
+        if self.strings_view_widget:
+            self.strings_view_widget.destroy()
+            self.strings_view_widget = None
+
+        if not self.pe_object:
+            return
+
+        translations = {
+            "address_col": self._("address_col"),
+            "type_col": self._("type_col"),
+            "section_col": self._("section_col"),
+            "string_col": self._("string_col"),
+        }
+        self.strings_view_widget = StringView(
+            self.strings_view_frame,
+            pe=self.pe_object,
+            on_select=self._on_string_select,
+            colors=self.colors,
+            translations=translations
+        )
+        self.strings_view_widget.pack(expand=True, fill=tk.BOTH)
+
+    def _populate_views_with_results(self):
+       
         self._populate_info_tab()
-        self._populate_explorer_tree()
-        self._populate_basic_blocks_tree()
-        self._populate_functions_tree()
-        self._populate_imports_exports_trees()
-        self._populate_classes_tree()
-        self._populate_variables_tree()
+        if self.settings.get("component_explorer_enabled", True): self._populate_explorer_tree()
+        if self.settings.get("component_blocks_enabled", True): self._populate_basic_blocks_tree()
+        if self.settings.get("component_functions_enabled", True): self._populate_functions_tree()
+        if self.settings.get("component_signatures_enabled", True): self._populate_signatures_tree()
+        if self.settings.get("component_strings_enabled", True): self._populate_strings_view()
+        if self.settings.get("component_imports_enabled", True): self._populate_imports_exports_trees()
+        if self.settings.get("component_classes_enabled", True): self._populate_classes_tree()
+        if self.settings.get("component_variables_enabled", True): self._populate_variables_tree()
+        self._populate_hex_view()
         self._redisplay_listing()
         self.export_button.config(state=tk.NORMAL)
-
+    
         try:
             entry_point_va = self.pe_object.OPTIONAL_HEADER.ImageBase + self.pe_object.OPTIONAL_HEADER.AddressOfEntryPoint
             self._scroll_to_address(entry_point_va)
         except (AttributeError, TypeError):
-            pass # Ничего страшного, если не удалось
+            pass
 
     def _redisplay_listing(self):
         if not self.current_filepath:
@@ -740,6 +805,23 @@ class DisassemblerApp(tk.Tk):
             self.variables_tree.insert(
                 "", "end",
                 values=(f"0x{var.address:x}", var.type, var.value),
+                iid=iid
+            )
+
+    def _populate_signatures_tree(self):
+        for item in self.signatures_tree.get_children():
+            self.signatures_tree.delete(item)
+        
+        if not self.scan_results:
+            self.signatures_tree.insert("", "end", values=(self._("signatures_not_found"), "", ""))
+            return
+
+        for res in self.scan_results:
+            iid = f"sig_{res.address}_{res.signature_id}"
+            addr_str = f"0x{res.address:x}" if res.address > 4096 else f"Offset {res.address}"
+            self.signatures_tree.insert(
+                "", "end",
+                values=(addr_str, res.type, res.name),
                 iid=iid
             )
 
@@ -947,6 +1029,46 @@ class DisassemblerApp(tk.Tk):
                 XrefsWindow(self, address, set(variable.xrefs), self.address_to_instruction, self.functions)
         except (ValueError, TypeError, StopIteration):
             return
+
+    def _on_signature_select(self, event):
+        selected_items = self.signatures_tree.selection()
+        if not selected_items:
+            return
+        
+        item_id = selected_items[0]
+        try:
+            parts = item_id.split('_')
+            address = int(parts[1])
+            
+            if address > 4096 and self.pe_object:
+                self._scroll_to_address(address)
+            elif self.hex_view_widget:
+                for i in range(len(self.right_notebook.tabs())):
+                    if self.right_notebook.tab(i, "text") == self._("hex_view_tab"):
+                        self.right_notebook.select(i)
+                        break
+                self.hex_view_widget.scroll_to_offset(address)
+        except (ValueError, TypeError, IndexError):
+            return
+
+    def _on_string_select(self, address: int):
+        
+        if not self.pe_object or not self.hex_view_widget:
+            return
+        
+        try:
+            rva = address - self.pe_object.OPTIONAL_HEADER.ImageBase
+            offset = self.pe_object.get_offset_from_rva(rva)
+            
+            
+            for i in range(len(self.right_notebook.tabs())):
+                if self.right_notebook.tab(i, "text") == self._("hex_view_tab"):
+                    self.right_notebook.select(i)
+                    break
+            
+            self.hex_view_widget.scroll_to_offset(offset)
+        except Exception:
+            self._scroll_to_address(address)
 
     def _scroll_to_address(self, address: int):
         line_index = self.address_to_line.get(address)
@@ -1170,7 +1292,7 @@ class DisassemblerApp(tk.Tk):
         iid = self.functions_tree.identify_row(event.y)
         if not iid:
             return
-        
+
         self.functions_tree.selection_set(iid)
         self.function_context_menu.tk_popup(event.x_root, event.y_root)
 
@@ -1190,7 +1312,7 @@ class DisassemblerApp(tk.Tk):
             
             if new_name and new_name != current_name:
                 self.user_labels[address] = new_name
-                self._run_analysis_and_populate_views()
+                self._start_async_analysis()
         except (ValueError, TypeError, IndexError, KeyError):
             messagebox.showerror(self._("error_title"), self._("rename_func_error"))
 
@@ -1212,12 +1334,19 @@ class DisassemblerApp(tk.Tk):
         }
         listing_changed = any(old_settings.get(k) != new_settings.get(k) for k in listing_keys)
 
+        component_keys = [
+            "component_functions_enabled", "component_blocks_enabled", "component_classes_enabled",
+            "component_variables_enabled", "component_signatures_enabled", "component_strings_enabled",
+            "component_info_enabled", "component_imports_enabled", "component_explorer_enabled"
+        ]
+        components_changed = any(old_settings.get(k) != new_settings.get(k) for k in component_keys)
+
         lang_changed = old_settings.get("language") != new_settings.get("language")
 
         if theme_changed:
             self._apply_theme()
 
-        if lang_changed:
+        if lang_changed or components_changed:
             messagebox.showinfo(
                 self._("restart_required_title"),
                 self._("restart_required_message")
@@ -1227,7 +1356,7 @@ class DisassemblerApp(tk.Tk):
             return
 
         if analysis_changed:
-            self._run_analysis_and_populate_views()
+            self._start_async_analysis()
         elif theme_changed or listing_changed:
             self._redisplay_listing()
 
@@ -1535,7 +1664,7 @@ class SettingsWindow(tk.Toplevel):
         notebook.add(analysis_tab, text=self.parent._("analysis_tab"))
 
         loading_frame = ttk.LabelFrame(analysis_tab, text=self.parent._("file_loading_group"))
-        loading_frame.pack(fill=tk.X, pady=5, padx=5)
+        loading_frame.pack(fill=tk.X, pady=(5,0), padx=5)
 
         self.auto_section_search_var = tk.BooleanVar(value=self.settings.get("auto_section_search", True))
         cb_auto_section = ttk.Checkbutton(
@@ -1543,7 +1672,7 @@ class SettingsWindow(tk.Toplevel):
         )
         cb_auto_section.pack(anchor='w', padx=5, pady=2)
         analysis_frame = ttk.LabelFrame(analysis_tab, text=self.parent._("func_analysis_group"))
-        analysis_frame.pack(fill=tk.X, pady=5, padx=5)
+        analysis_frame.pack(fill=tk.X, pady=(5,0), padx=5)
 
         self.use_prologue_heuristic_var = tk.BooleanVar(value=self.settings.get("use_prologue_heuristic", True))
         cb_prologue = ttk.Checkbutton(analysis_frame, text=self.parent._("prologue_heuristic_checkbox"), variable=self.use_prologue_heuristic_var)
@@ -1562,7 +1691,7 @@ class SettingsWindow(tk.Toplevel):
         cb_blocks.pack(anchor='w', padx=5, pady=2)
 
         other_analysis_frame = ttk.LabelFrame(analysis_tab, text=self.parent._("other_analyzers_group"))
-        other_analysis_frame.pack(fill=tk.X, pady=5, padx=5)
+        other_analysis_frame.pack(fill=tk.X, pady=(5,0), padx=5)
 
         self.analyze_xrefs_var = tk.BooleanVar(value=self.settings.get("analyze_xrefs", True))
         cb_xrefs = ttk.Checkbutton(other_analysis_frame, text=self.parent._("analyze_xrefs_checkbox"), variable=self.analyze_xrefs_var)
@@ -1575,6 +1704,14 @@ class SettingsWindow(tk.Toplevel):
         self.analyze_variables_var = tk.BooleanVar(value=self.settings.get("analyze_variables", True))
         cb_vars = ttk.Checkbutton(other_analysis_frame, text=self.parent._("analyze_vars_checkbox"), variable=self.analyze_variables_var)
         cb_vars.pack(anchor='w', padx=5, pady=2)
+
+        self.analyze_signatures_var = tk.BooleanVar(value=self.settings.get("analyze_signatures", True))
+        cb_sigs = ttk.Checkbutton(
+            other_analysis_frame,
+            text=self.parent._("analyze_signatures_checkbox"),
+            variable=self.analyze_signatures_var
+        )
+        cb_sigs.pack(anchor='w', padx=5, pady=2)
 
         self.analyze_all_sections_var = tk.BooleanVar(value=self.settings.get("analyze_all_sections_for_compiler", True))
         cb_all_sections = ttk.Checkbutton(
@@ -1597,6 +1734,31 @@ class SettingsWindow(tk.Toplevel):
 
         warning_label = ttk.Label(anti_debug_frame, text=self.parent._("beta_warning"), style="Warning.TLabel")
         warning_label.pack(side=tk.LEFT, padx=(5, 0))
+
+        components_tab = ttk.Frame(notebook, padding="10")
+        notebook.add(components_tab, text=self.parent._("settings_components_tab"))
+
+        components_frame = ttk.LabelFrame(components_tab, text=self.parent._("toolbox_components_group"))
+        components_frame.pack(fill=tk.X, pady=5, padx=5)
+
+        self.component_vars = {}
+        component_keys = [
+            ("functions", "enable_functions_tab"), ("blocks", "enable_blocks_tab"),
+            ("classes", "enable_classes_tab"), ("variables", "enable_variables_tab"),
+            ("signatures", "enable_signatures_tab"), ("strings", "enable_strings_tab"),
+            ("info", "enable_info_tab"), ("imports", "enable_imports_tab"),
+            ("explorer", "enable_explorer_tab"),
+        ]
+
+        for key, text_key in component_keys:
+            setting_key = f"component_{key}_enabled"
+            self.component_vars[key] = tk.BooleanVar(value=self.settings.get(setting_key, True))
+            cb = ttk.Checkbutton(
+                components_frame,
+                text=self.parent._(text_key),
+                variable=self.component_vars[key]
+            )
+            cb.pack(anchor='w', padx=5, pady=2)
 
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(fill=tk.X, side=tk.BOTTOM, pady=(15, 0))
@@ -1632,9 +1794,13 @@ class SettingsWindow(tk.Toplevel):
         self.parent.settings["show_errors_highlight"] = self.show_errors_highlight_var.get()
         self.parent.settings["analyze_variables"] = self.analyze_variables_var.get()
         self.parent.settings["analyze_anti_debug"] = self.analyze_anti_debug_var.get()
+        self.parent.settings["analyze_signatures"] = self.analyze_signatures_var.get()
         self.parent.settings["auto_section_search"] = self.auto_section_search_var.get()
         self.parent.settings["analyze_all_sections_for_compiler"] = self.analyze_all_sections_var.get()
         self.parent.settings["language"] = self.lang_var.get()
+
+        for key, var in self.component_vars.items():
+            self.parent.settings[f"component_{key}_enabled"] = var.get()
 
         self.parent._save_settings()
         self.parent.apply_settings(old_settings)
@@ -1654,7 +1820,12 @@ class SettingsWindow(tk.Toplevel):
         self.show_errors_highlight_var.set(self.defaults["show_errors_highlight"])
         self.analyze_variables_var.set(self.defaults["analyze_variables"])
         self.analyze_anti_debug_var.set(self.defaults["analyze_anti_debug"])
+        self.analyze_signatures_var.set(self.defaults["analyze_signatures"])
         self.auto_section_search_var.set(self.defaults["auto_section_search"])
         self.analyze_all_sections_var.set(self.defaults["analyze_all_sections_for_compiler"])
         self.lang_var.set(self.defaults["language"])
+        self.lang_combo.set(self.lang_map.get(self.defaults["language"]))
+
+        for key, var in self.component_vars.items():
+            var.set(self.defaults[f"component_{key}_enabled"])
         self.lang_combo.set(self.lang_map.get(self.defaults["language"]))

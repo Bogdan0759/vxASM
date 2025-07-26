@@ -3,10 +3,11 @@ import re
 import struct
 from .instruction import Instruction
 from typing import List, Set, Dict, Optional, TYPE_CHECKING
+import pefile
 
 if TYPE_CHECKING:
-    import pefile
-    
+    from utils.progress import AnalysisWorker
+
 @dataclasses.dataclass
 class BasicBlock:
     
@@ -271,6 +272,7 @@ def find_functions(
     use_separators: bool = True,
     use_padding: bool = True,
     analyze_blocks: bool = True,
+    worker: Optional["AnalysisWorker"] = None,
 ) -> List[FoundFunction]:
     
     if not instructions:
@@ -278,42 +280,33 @@ def find_functions(
 
     entry_points = set()
     
-    
-    
+    if worker: worker.queue.put(("status", "Поиск точек входа..."))
+
     if entry_point:
         entry_points.add(entry_point)
     
-    
     valid_addresses = {instr.address for instr in instructions}
     
-    
-    
+    if worker: worker.queue.put(("status", "Поиск целей вызовов (call)..."))
     entry_points.update(_find_call_targets(instructions, valid_addresses))
-    
-    
     
     jmp_targets = _collect_jump_targets(instructions)
 
     if use_prologues:
-        
+        if worker: worker.queue.put(("status", "Анализ стандартных прологов..."))
         prologue_candidates = _find_standard_prologues(instructions)
-        
         entry_points.update(p for p in prologue_candidates if p not in jmp_targets)
 
     if use_separators:
-        
+        if worker: worker.queue.put(("status", "Поиск кода после инструкций-разделителей..."))
         separator_candidates = _find_after_flow_separators(instructions)
-        
         entry_points.update(s for s in separator_candidates if s not in jmp_targets)
 
     if use_padding:
-        
+        if worker: worker.queue.put(("status", "Поиск кода после блоков выравнивания..."))
         padding_candidates = _find_after_padding_blocks(instructions)
         entry_points.update(p for p in padding_candidates if p not in jmp_targets)
 
-    
-    
-    
     if exports:
         entry_points.update(addr for addr in exports.keys() if addr in valid_addresses)
 
@@ -328,8 +321,15 @@ def find_functions(
     sorted_starts = sorted(list(valid_entry_points))
     addr_to_instr_idx = {instr.address: i for i, instr in enumerate(instructions)}
 
+    total_functions = len(sorted_starts)
     found_functions_with_blocks = []
     for i, start_addr in enumerate(sorted_starts):
+        if worker:
+            
+            progress_percent = int((i / total_functions) * 100) if total_functions > 0 else 0
+            worker.queue.put(("progress", progress_percent))
+            
+            worker.queue.put(("status", f"Анализ функции {i+1}/{total_functions} по адресу 0x{start_addr:x}..."))
         
         name = user_labels.get(start_addr, exports.get(start_addr, f"sub_{start_addr:x}"))
         
@@ -430,4 +430,7 @@ def find_functions(
 
         found_functions_with_blocks.append(FoundFunction(address=start_addr, name=name, blocks=blocks, has_errors=function_has_errors, is_stub=is_stub))
 
+    if worker:
+        worker.queue.put(("status", "Завершение..."))
+        worker.queue.put(("progress", 100))
     return found_functions_with_blocks

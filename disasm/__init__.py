@@ -6,6 +6,8 @@ from .debugger_analyzer import analyze_anti_debug, DetectionResult
 from .info_analyzer import analyze_pe_info, FileInfo, ImportedFunction, _detect_msvc, SecurityFeatures, SectionInfo
 from .explorer_analyzer import analyze_structure, ExplorerNode
 from .var_search import find_variables, FoundVariable
+from .signature_scanner import SignatureScanner, ScanResult
+from .signatures import SIGNATURES
 
 __all__ = [
     "Disassembler",
@@ -29,4 +31,7 @@ __all__ = [
     "_detect_msvc",
     "find_variables",
     "FoundVariable",
+    "SignatureScanner",
+    "ScanResult",
+    "SIGNATURES",
 ]

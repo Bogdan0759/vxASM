@@ -15,7 +15,7 @@ except ImportError:
     pefile = None
 
 def calculate_entropy(data: bytes) -> float:
-    """Вычисляет энтропию Шеннона для строки байтов."""
+    
     if not data:
         return 0.0
     
@@ -34,7 +34,6 @@ def calculate_entropy(data: bytes) -> float:
 
 @dataclasses.dataclass
 class SecurityFeatures:
-    """Структура для хранения информации о функциях безопасности файла."""
     aslr: bool = False
     dep: bool = False
     safe_seh: bool = False
@@ -44,13 +43,11 @@ class SecurityFeatures:
     high_entropy_sections: bool = False
 @dataclasses.dataclass
 class ImportedFunction:
-    """Представляет одну импортированную функцию."""
     name: str
     address: int
 
 @dataclasses.dataclass
 class SectionInfo:
-    """Структура для хранения информации о секции."""
     name: str
     virtual_address: int
     virtual_size: int
@@ -60,7 +57,7 @@ class SectionInfo:
 
 @dataclasses.dataclass
 class FileInfo:
-    """Структура для хранения общей информации о файле."""
+    
     hashes: Dict[str, str]
     general: Dict[str, Any]
     compiler: str
@@ -72,10 +69,7 @@ class FileInfo:
     exports: Dict[int, str]
 
 def _has_cpp_evidence(pe: "pefile.PE", search_data: bytes) -> bool:
-    """
-    Проверяет наличие признаков C++ в файле (RTTI или манглированные экспорты).
-    Это помогает отличить C от C++.
-    """
+    
     
     if hasattr(pe, 'DIRECTORY_ENTRY_EXPORT'):
         for exp in pe.DIRECTORY_ENTRY_EXPORT.symbols:
@@ -98,7 +92,6 @@ def _has_cpp_evidence(pe: "pefile.PE", search_data: bytes) -> bool:
 
 
 def _detect_pyinstaller(pe: "pefile.PE", search_data: bytes) -> Optional[tuple[str, str]]:
-    """Detects PyInstaller packed executables."""
     pyinstaller_signatures = [
         b'pyi-windows-manifest-filename', b'pyi-archive', b'pyi-loader',
         b'pyinstaller', b'pyimod', b'Pyi-Main',
@@ -113,7 +106,6 @@ def _detect_pyinstaller(pe: "pefile.PE", search_data: bytes) -> Optional[tuple[s
     return None
 
 def _detect_dotnet(pe: "pefile.PE", search_data: bytes) -> Optional[tuple[str, str]]:
-    """Detects .NET assemblies and tries to determine the version."""
     if not (hasattr(pe, 'DIRECTORY_ENTRY_COM_DESCRIPTOR') and pe.DIRECTORY_ENTRY_COM_DESCRIPTOR.struct.VirtualAddress != 0):
         return None
 
@@ -143,10 +135,7 @@ def _detect_dotnet(pe: "pefile.PE", search_data: bytes) -> Optional[tuple[str, s
     return "N/A (.NET)", language
 
 def _detect_dotnet_aot(pe: "pefile.PE", search_data: bytes) -> Optional[tuple[str, str]]:
-    """
-    Detects .NET Native AOT compiled binaries. These are native executables
-    without the standard CLR header, so they can be misidentified as C++.
-    """
+
     
     
     if b'System.Private.CoreLib' in search_data:
@@ -166,25 +155,21 @@ def _detect_dotnet_aot(pe: "pefile.PE", search_data: bytes) -> Optional[tuple[st
     return None
 
 def _detect_upx(pe: "pefile.PE", search_data: bytes) -> Optional[tuple[str, str]]:
-    """Basic detection for UPX packer."""
     if any(s.Name.startswith(b'UPX') for s in pe.sections):
         return "UPX Packer", "N/A (Packed)"
     return None
 
 def _detect_autoit(pe: "pefile.PE", search_data: bytes) -> Optional[tuple[str, str]]:
-    """Detects AutoIt compiled scripts."""
     if b'AU3!EA06' in search_data[-4096:]: 
         return "AutoIt v3 Script", "AutoIt"
     return None
 
 def _detect_nsis(pe: "pefile.PE", search_data: bytes) -> Optional[tuple[str, str]]:
-    """Detects NSIS (Nullsoft Scriptable Install System) installers."""
     if b'NullsoftInst' in search_data or b'Nullsoft Install System' in search_data:
         return "NSIS (Nullsoft Installer)", "NSIS Script"
     return None
 
 def _detect_inno(pe: "pefile.PE", search_data: bytes) -> Optional[tuple[str, str]]:
-    """Detects Inno Setup installers."""
     if any(s.Name.startswith(b'.itext') for s in pe.sections):
         return "Inno Setup", "Inno Script"
     if b'Inno Setup' in search_data:
@@ -192,13 +177,11 @@ def _detect_inno(pe: "pefile.PE", search_data: bytes) -> Optional[tuple[str, str
     return None
 
 def _detect_go(pe: "pefile.PE", search_data: bytes) -> Optional[tuple[str, str]]:
-    """Detects Go language binaries."""
     if any(s.Name.startswith(b'.gopclntab') for s in pe.sections) or re.search(b'go.buildid', search_data):
         return "Go Compiler", "Go"
     return None
 
 def _detect_rust(pe: "pefile.PE", search_data: bytes) -> Optional[tuple[str, str]]:
-    """Detects Rust language binaries."""
     rust_signatures = [b'rust_begin_unwind', b'panicking.rs', b'library/core/src', b'library/std/src']
     if any(re.search(re.escape(sig), search_data) for sig in rust_signatures) or \
        re.search(b'__rust_[a-zA-Z0-9_]+', search_data) or \
@@ -206,8 +189,55 @@ def _detect_rust(pe: "pefile.PE", search_data: bytes) -> Optional[tuple[str, str
         return "Rust (Cargo)", "Rust"
     return None
 
+def _detect_dlang(pe: "pefile.PE", search_data: bytes) -> Optional[tuple[str, str]]:
+    
+    if hasattr(pe, 'DIRECTORY_ENTRY_IMPORT'):
+        for entry in pe.DIRECTORY_ENTRY_IMPORT:
+            dll_name = entry.dll.lower()
+            if dll_name.startswith((b'phobos', b'druntime')):
+                return "D Language", "D"
+    
+    if re.search(b'_Dmain|_DSO_NAME', search_data):
+        return "D Language", "D"
+    
+    if re.search(re.escape(b'ldc.attributes'), search_data):
+        return "D Language (LDC)", "D"
+        
+    return None
+
+def _detect_nim(pe: "pefile.PE", search_data: bytes) -> Optional[tuple[str, str]]:
+    
+    nim_signatures = [
+        b'nim_main', b'nimrtl.dll', b'nimcache', b'Nim Main',
+        b'invalid value for enum', b'SIGSEGV: Illegal storage access' 
+    ]
+    if any(re.search(re.escape(sig), search_data) for sig in nim_signatures):
+        return "Nim", "Nim"
+    return None
+
+def _detect_free_pascal(pe: "pefile.PE", search_data: bytes) -> Optional[tuple[str, str]]:
+    match = re.search(b'Free Pascal.*?version ([0-9\\.]+)', search_data, re.IGNORECASE)
+    if match:
+        version = match.group(1).decode(errors='ignore')
+        return f"Free Pascal/Lazarus (v{version})", "Pascal"
+
+    if re.search(b'Free Pascal|FPC|Lazarus', search_data, re.IGNORECASE):
+        return "Free Pascal/Lazarus", "Pascal"
+    
+    
+    if hasattr(pe, 'DIRECTORY_ENTRY_EXPORT') and any(exp.name and exp.name.startswith((b'FPC_', b'LAZ_')) for exp in pe.DIRECTORY_ENTRY_EXPORT.symbols):
+        return "Free Pascal/Lazarus", "Pascal"
+
+    
+    if re.search(b'\x07Classes\x05TList', search_data):
+        return "Free Pascal/Lazarus", "Pascal"
+
+    
+    if re.search(b'SYSTEM_INITIALIZEUNITS', search_data):
+        return "Free Pascal/Lazarus", "Pascal"
+    return None
+
 def _detect_mingw_gcc(pe: "pefile.PE", search_data: bytes) -> Optional[tuple[str, str]]:
-    """Detects MinGW/GCC compiled binaries."""
     if hasattr(pe, 'DIRECTORY_ENTRY_IMPORT'):
         for entry in pe.DIRECTORY_ENTRY_IMPORT:
             dll_name = entry.dll.lower()
@@ -220,7 +250,6 @@ def _detect_mingw_gcc(pe: "pefile.PE", search_data: bytes) -> Optional[tuple[str
     return None
 
 def _detect_intel(pe: "pefile.PE", search_data: bytes) -> Optional[tuple[str, str]]:
-    """Detects Intel C++ Compiler binaries."""
     if re.search(b'Intel\\(R\\) C\\+\\+ Compiler', search_data):
         return "Intel C++ Compiler", "C++"
     if hasattr(pe, 'DIRECTORY_ENTRY_IMPORT') and any(entry.dll.lower().startswith(b'libmmd') for entry in pe.DIRECTORY_ENTRY_IMPORT):
@@ -228,7 +257,6 @@ def _detect_intel(pe: "pefile.PE", search_data: bytes) -> Optional[tuple[str, st
     return None
 
 def _detect_msvc(pe: "pefile.PE", search_data: bytes) -> Optional[tuple[str, str]]:
-    """Detects Microsoft Visual C++ compiled binaries using Rich header, strings, and imports."""
     
     
     
@@ -309,10 +337,10 @@ def _detect_msvc(pe: "pefile.PE", search_data: bytes) -> Optional[tuple[str, str
     return None
 
 def _detect_delphi(pe: "pefile.PE", search_data: bytes) -> Optional[tuple[str, str]]:
-    """Detects Borland Delphi or C++ Builder binaries using several heuristics."""
+    
     
     if any(b'Borland' in section.Name for section in pe.sections):
-        return "Borland Delphi or C++ Builder", "Delphi/Pascal or C++"
+        return "Borland/Embarcadero Delphi or C++ Builder", "Delphi/Pascal or C++"
 
     
     if hasattr(pe, 'DIRECTORY_ENTRY_RESOURCE'):
@@ -321,25 +349,35 @@ def _detect_delphi(pe: "pefile.PE", search_data: bytes) -> Optional[tuple[str, s
                 if res_type.id == pefile.RESOURCE_TYPE['RT_RCDATA']:
                     if not hasattr(res_type, 'directory'): continue
                     for res_id in res_type.directory.entries:
-                        if hasattr(res_id, 'name') and res_id.name and hasattr(res_id.name, 'string') and res_id.name.string == b'DVCLAL':
-                            return "Borland Delphi", "Delphi/Pascal"
-        except Exception:
-            
-            pass
+                        if not hasattr(res_id, 'name') or not res_id.name or not hasattr(res_id.name, 'string'):
+                            continue
+                        
+                        res_name = res_id.name.string
+                        if res_name == b'PACKAGEINFO':
+                            data_rva = res_id.directory.entries[0].data.struct.OffsetToData
+                            size = res_id.directory.entries[0].data.struct.Size
+                            data = pe.get_data(data_rva, size)
+                            match = re.search(b'\\d{2}\\.\\d', data)
+                            if match:
+                                version = match.group(0).decode(errors='ignore')
+                                return f"Embarcadero Delphi/C++ Builder (v{version})", "Delphi/Pascal"
+                            return "Embarcadero Delphi/C++ Builder", "Delphi/Pascal"
 
+                        if res_name in (b'DVCLAL', b'PLATFORMTARGETS'):
+                            return "Borland/Embarcadero Delphi", "Delphi/Pascal"
+        except Exception:
+            pass
+   
     
-    
-    
-    data_sections = [s for s in pe.sections if s.Name.startswith(b'.rdata') or s.Name.startswith(b'.data')]
-    for section in data_sections:
-        data = section.get_data()
-        if re.search(b'\x07TObject', data):
-            return "Borland Delphi", "Delphi/Pascal"
+    if re.search(b'\x07TObject', search_data):
+        return "Borland/Embarcadero Delphi", "Delphi/Pascal"
+    if any(re.search(re.escape(sig), search_data) for sig in [b'System.SysUtils', b'System.Classes', b'Borland.Delphi', b'Embarcadero.Delphi', b'CodeGear Delphi']):
+        return "Borland/Embarcadero Delphi", "Delphi/Pascal"
 
     return None
 
 def _detect_vb6(pe: "pefile.PE", search_data: bytes) -> Optional[tuple[str, str]]:
-    """Detects Visual Basic 5/6 binaries."""
+    
     if hasattr(pe, 'DIRECTORY_ENTRY_IMPORT'):
         for entry in pe.DIRECTORY_ENTRY_IMPORT:
             dll_name = entry.dll.lower()
@@ -355,7 +393,6 @@ def _detect_vb6(pe: "pefile.PE", search_data: bytes) -> Optional[tuple[str, str]
     return None
 
 def _detect_assembler(pe: "pefile.PE", search_data: bytes) -> Optional[tuple[str, str]]:
-    """Weak heuristic for assemblers like FASM, MASM, NASM. Runs last."""
     if hasattr(pe, 'DIRECTORY_ENTRY_IMPORT'):
         total_imports = sum(len(entry.imports) for entry in pe.DIRECTORY_ENTRY_IMPORT)
         total_dlls = len(pe.DIRECTORY_ENTRY_IMPORT)
@@ -366,7 +403,6 @@ def _detect_assembler(pe: "pefile.PE", search_data: bytes) -> Optional[tuple[str
     return None
 
 def _detect_protectors(pe: "pefile.PE", search_data: bytes) -> Optional[str]:
-    """Heuristically detects common packers/protectors."""
     
     if any(s.Name.startswith((b'.vmp0', b'.vmp1')) for s in pe.sections):
         return "VMProtect"
@@ -379,7 +415,6 @@ def _detect_protectors(pe: "pefile.PE", search_data: bytes) -> Optional[str]:
     return None
 
 def _detect_qt(pe: "pefile.PE", search_data: bytes) -> Optional[tuple[str, str]]:
-    """Detects Qt framework usage."""
     rdata = next((s.get_data() for s in pe.sections if s.Name.startswith(b'.rdata')), None)
     if rdata:
         if re.search(b'Qt5Core\\.dll', rdata) or re.search(b'Qt6Core\\.dll', rdata):
@@ -387,10 +422,7 @@ def _detect_qt(pe: "pefile.PE", search_data: bytes) -> Optional[tuple[str, str]]
     return None
 
 def analyze_pe_info(pe: "pefile.PE", analyze_all_sections: bool = True) -> Optional[FileInfo]:
-    """
-    Анализирует PE-файл и извлекает общую информацию: хеши, детали заголовка,
-    а также пытается определить компилятор и язык программирования.
-    """
+    
     if not pe or not pefile:
         return None
 
@@ -510,6 +542,9 @@ def analyze_pe_info(pe: "pefile.PE", analyze_all_sections: bool = True) -> Optio
     compiler_detectors = [
         _detect_go,
         _detect_rust,
+        _detect_dlang,
+        _detect_nim,
+        _detect_free_pascal,
         _detect_mingw_gcc,
         _detect_intel,
         _detect_msvc,
@@ -528,7 +563,6 @@ def analyze_pe_info(pe: "pefile.PE", analyze_all_sections: bool = True) -> Optio
     imports = {}
 
     def _process_import_directory(import_entries, is_delayed=False):
-        """Внутренняя функция для обработки как обычных, так и отложенных импортов."""
         if not import_entries:
             return
         for entry in import_entries:

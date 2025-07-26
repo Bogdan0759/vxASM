@@ -332,8 +332,17 @@ def _find_ntqueryinformationprocess_checks(
     
     
     debug_classes = { 7: "ProcessDebugPort", 0x1e: "ProcessDebugObjectHandle", 0x1f: "ProcessDebugFlags" }
-
-    ntqip_call_indices = [i for i, instr in enumerate(instructions) if instr.mnemonic == 'call' and iat_address_to_func_name.get(int(instr.operands, 16) if instr.operands.startswith('0x') else 0) == 'ntqueryinformationprocess']
+    
+    ntqip_call_indices = []
+    for i, instr in enumerate(instructions):
+        if instr.mnemonic == 'call' and instr.operands.startswith('0x'):
+            try:
+                
+                target_addr = int(instr.operands, 16)
+                if iat_address_to_func_name.get(target_addr) == 'ntqueryinformationprocess':
+                    ntqip_call_indices.append(i)
+            except ValueError:
+                continue 
 
     for call_index in ntqip_call_indices:
         

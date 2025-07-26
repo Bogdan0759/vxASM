@@ -311,6 +311,70 @@ def _find_msvc_classes(pe: "pefile.PE") -> List[FoundClass]:
 
     return sorted(list(found_classes_dict.values()), key=lambda c: c.vtable_address)
 
+def _find_delphi_classes(pe: "pefile.PE") -> List[FoundClass]:
+    if not pe or not pefile:
+        return []
+
+    image_base = pe.OPTIONAL_HEADER.ImageBase
+    is_64bit = pe.FILE_HEADER.Machine == pefile.MACHINE_TYPE['IMAGE_FILE_MACHINE_AMD64']
+    pointer_size = 8 if is_64bit else 4
+    unpack_format = '<Q' if is_64bit else '<I'
+
+    data_sections = [s for s in pe.sections if s.Characteristics & pefile.SECTION_CHARACTERISTICS['IMAGE_SCN_MEM_READ']]
+    text_section = next((s for s in pe.sections if s.Name.startswith(b'.text')), None)
+    if not data_sections or not text_section:
+        return []
+
+    
+    class_name_rvas = {}
+    
+    
+    name_pattern = re.compile(b'([\x01-\xff])T([A-Za-z0-9_]{2,})')
+
+    for section in data_sections:
+        data = section.get_data()
+        for match in name_pattern.finditer(data):
+            length = match.group(1)[0]
+            name_bytes = b'T' + match.group(2)
+            
+            if len(name_bytes) == length:
+                typeinfo_offset = match.start() - 1
+                if typeinfo_offset > 0 and data[typeinfo_offset] == 4: # tkClass
+                    typeinfo_rva = section.VirtualAddress + typeinfo_offset
+                    class_name_rvas[typeinfo_rva] = name_bytes.decode('latin-1', errors='ignore')
+
+    if not class_name_rvas:
+        return []
+
+    vmt_typeinfo_offset = -24 if is_64bit else -12
+
+    found_classes = {}
+    target_vas = {image_base + rva for rva in class_name_rvas}
+
+    for section in data_sections:
+        data = section.get_data()
+        for i in range(0, len(data) - pointer_size + 1, 4):
+            ptr_val = struct.unpack_from(unpack_format, data, i)[0]
+            
+            if ptr_val in target_vas:
+                typeinfo_va = ptr_val
+                typeinfo_rva = typeinfo_va - image_base
+                class_name = class_name_rvas.get(typeinfo_rva)
+                if not class_name: continue
+
+                vmt_rva = section.VirtualAddress + i + vmt_typeinfo_offset
+                vmt_va = image_base + vmt_rva
+
+                if vmt_va in found_classes or vmt_rva < 0:
+                    continue
+
+                methods = _extract_delphi_vmt_methods(pe, vmt_rva, text_section, pointer_size, unpack_format)
+
+                if len(methods) >= 3: 
+                    found_classes[vmt_va] = FoundClass(vtable_address=vmt_va, name=class_name, methods=methods)
+
+    return sorted(list(found_classes.values()), key=lambda c: c.vtable_address)
+
 def _find_itanium_classes(pe: "pefile.PE") -> List[FoundClass]:
     
     image_base = pe.OPTIONAL_HEADER.ImageBase
@@ -417,6 +481,27 @@ def _find_itanium_classes(pe: "pefile.PE") -> List[FoundClass]:
 
     return sorted(found_classes, key=lambda c: c.vtable_address)
 
+def _extract_delphi_vmt_methods(pe, vmt_rva, text_section, pointer_size, unpack_format):
+    methods = []
+    image_base = pe.OPTIONAL_HEADER.ImageBase
+    try:
+        vtable_data = pe.get_data(vmt_rva, 256 * pointer_size)
+        offset = 0
+        while offset <= len(vtable_data) - pointer_size:
+            method_va = struct.unpack_from(unpack_format, vtable_data, offset)[0]
+            if method_va == 0:
+                break
+            
+            method_rva = method_va - image_base
+            if text_section.VirtualAddress <= method_rva < text_section.VirtualAddress + text_section.Misc_VirtualSize:
+                methods.append(method_va)
+            else:
+                break
+            offset += pointer_size
+    except Exception:
+        pass 
+    return methods
+
 def find_classes(pe: "pefile.PE", file_info: Optional["FileInfo"] = None) -> List[FoundClass]:
     
     if not pe or not pefile:
@@ -445,6 +530,16 @@ def find_classes(pe: "pefile.PE", file_info: Optional["FileInfo"] = None) -> Lis
         stub_class = FoundClass(vtable_address=0, name="Python Application (PyInstaller)", methods=[], is_stub=True)
         return [stub_class]
 
+    is_pascal = False
+    if file_info and file_info.language:
+        lang_lower = file_info.language.lower()
+        if "delphi" in lang_lower or "pascal" in lang_lower:
+            is_pascal = True
+
+    if is_pascal:
+        pascal_classes = _find_delphi_classes(pe)
+        if pascal_classes:
+            return pascal_classes
     
     if file_info and "UPX" in file_info.compiler:
         stub_class = FoundClass(vtable_address=0, name="UPX Packed File (unpack first)", methods=[], is_stub=True)
