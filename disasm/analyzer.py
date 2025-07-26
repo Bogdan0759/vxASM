@@ -5,7 +5,7 @@ from typing import List, Set, Dict, Optional
 
 @dataclasses.dataclass
 class BasicBlock:
-    """Представляет один базовый блок внутри функции."""
+    
     start_address: int
     end_address: int
     successors: List[int] = dataclasses.field(default_factory=list)
@@ -14,7 +14,7 @@ class BasicBlock:
 
 @dataclasses.dataclass
 class FoundFunction:
-    """Представляет функцию, найденную в байт-коде."""
+    
     address: int
     name: str
     blocks: List[BasicBlock] = dataclasses.field(default_factory=list)
@@ -22,10 +22,7 @@ class FoundFunction:
     is_stub: bool = False
 
 def _is_function_a_stub(instructions_slice: List[Instruction]) -> bool:
-    """
-    Проверяет, является ли найденная функция вероятной заглушкой (thunk).
-    Критерии: очень короткая (1-3 инструкции) и заканчивается безусловным переходом (jmp).
-    """
+    
     if not instructions_slice or len(instructions_slice) > 3:
         return False
 
@@ -48,10 +45,7 @@ def _is_function_a_stub(instructions_slice: List[Instruction]) -> bool:
     return True
 
 def _collect_jump_targets(instructions: List[Instruction]) -> Set[int]:
-    """
-    Проходит по всем инструкциям и собирает адреса, на которые
-    совершаются переходы (цели jmp, jcc). Исключает CALL.
-    """
+    
     targets = set()
     for instr in instructions:
         
@@ -66,7 +60,7 @@ def _collect_jump_targets(instructions: List[Instruction]) -> Set[int]:
     return targets
     
 def _find_call_targets(instructions: List[Instruction], valid_addresses: Set[int]) -> Set[int]:
-    """Эвристика 1: Находит все цели прямых инструкций CALL."""
+    
     entry_points = set()
     for instr in instructions:
         if instr.mnemonic == "call":
@@ -79,11 +73,7 @@ def _find_call_targets(instructions: List[Instruction], valid_addresses: Set[int
     return entry_points
 
 def _find_after_flow_separators(instructions: List[Instruction]) -> Set[int]:
-    """
-    Эвристика 3: Находит инструкции, следующие за разделителями потока управления.
-    Разделителем считается инструкция, безусловно завершающая поток (ret, jmp, iret).
-    Блоки int3/nop обрабатываются отдельной эвристикой.
-    """
+    
     entry_points = set()
     
     separator_mnemonics = {'jmp', 'ret', 'retn', 'retf', 'iret', 'iretd', 'iretq'}
@@ -103,11 +93,7 @@ def _find_after_flow_separators(instructions: List[Instruction]) -> Set[int]:
     return entry_points
 
 def _find_standard_prologues(instructions: List[Instruction]) -> Set[int]:
-    """
-    Эвристика 2: Находит стандартные и распространенные прологи функций.
-    Это "умный" поиск, который распознает не только классический `push rbp; mov rbp, rsp`,
-    но и другие паттерны, используемые компиляторами (например, выделение стека).
-    """
+    
     entry_points = set()
     processed_addresses = set()
 
@@ -128,6 +114,11 @@ def _find_standard_prologues(instructions: List[Instruction]) -> Set[int]:
                 entry_points.add(instr1.address)
                 processed_addresses.add(instr1.address)
                 processed_addresses.add(instr2.address)
+                
+                if i + 2 < len(instructions):
+                    third_instr = instructions[i+2]
+                    if third_instr.mnemonic == 'sub' and third_instr.operands.startswith(('rsp,', 'esp,')):
+                        processed_addresses.add(third_instr.address)
                 continue
 
         
@@ -145,11 +136,7 @@ def _find_standard_prologues(instructions: List[Instruction]) -> Set[int]:
     return entry_points
 
 def _find_after_padding_blocks(instructions: List[Instruction]) -> Set[int]:
-    """
-    Эвристика 4: Находит инструкции, следующие за блоками-заполнителями (padding).
-    Это "умный" поиск, который обрабатывает как длинные блоки выравнивания (часто из `nop`),
-    так и одиночные байты `int3`, которые компиляторы вставляют между функциями.
-    """
+    
     entry_points = set()
     padding_bytes = {b'\xcc', b'\x90'}
     flow_terminators = {'ret', 'retn', 'jmp', 'iret'}
@@ -183,13 +170,9 @@ def find_xrefs(
     instructions: List[Instruction],
     valid_addr_range: Optional[tuple[int, int]] = None
 ) -> Dict[int, Set[int]]:
-    """
-    Анализирует инструкции для поиска перекрестных ссылок (xrefs).
-    Возвращает словарь, где ключ - это адрес назначения, а значение -
-    множество адресов, которые на него ссылаются.
-    valid_addr_range: Опциональный кортеж (min_addr, max_addr) для фильтрации
-                      ссылок, чтобы отсеять обычные числа.
-    """
+    
+    
+    
     xrefs: Dict[int, Set[int]] = {}
     hex_pattern = re.compile(r'0x[0-9a-fA-F]+')
 
@@ -209,13 +192,7 @@ def find_xrefs(
     return xrefs
 
 def flag_consecutive_errors(instructions: List[Instruction], threshold: int = 3):
-    """
-    Анализирует список инструкций и помечает как ошибочные только
-    последовательности "сырых байт" (db), превышающие порог.
-    Это помогает избежать ложных срабатываний на единичных байтах данных
-    внутри функций, но при этом подсвечивает большие области, где
-    дизассемблер потерял синхронизацию.
-    """
+    
     if not instructions:
         return
 
@@ -242,10 +219,7 @@ def find_functions(
     use_padding: bool = True,
     analyze_blocks: bool = True,
 ) -> List[FoundFunction]:
-    """
-    Анализирует список инструкций для поиска точек входа в функции.
-    Использует набор эвристик для повышения точности.
-    """
+    
     if not instructions:
         return []
 

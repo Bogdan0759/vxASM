@@ -17,6 +17,77 @@ from disasm import (
     find_variables, FoundVariable
 )
 
+class ScrollableNotebook(ttk.Frame):
+    """
+    A custom ttk.Notebook-like widget with horizontally scrollable tabs.
+    """
+    def __init__(self, master, **kwargs):
+        super().__init__(master, **kwargs)
+
+        self.tab_area = ttk.Frame(self)
+        self.tab_area.pack(side="top", fill="x", expand=False, pady=(0, 1))
+
+        self.canvas = tk.Canvas(self.tab_area, highlightthickness=0)
+        self.scrollbar = ttk.Scrollbar(self.tab_area, orient="horizontal", command=self.canvas.xview)
+        self.canvas.configure(xscrollcommand=self.scrollbar.set)
+
+        self.canvas.pack(side="top", fill="x")
+        self.scrollbar.pack(side="bottom", fill="x")
+
+        self.tab_container = ttk.Frame(self.canvas)
+        self.canvas.create_window((0, 0), window=self.tab_container, anchor="nw")
+
+        self._content_container = ttk.Frame(self, style="Content.TFrame")
+        self._content_container.pack(side="top", fill="both", expand=True)
+
+        self._tabs = {}
+        self._selected_var = tk.StringVar()
+
+        self.tab_container.bind("<Configure>", self._on_frame_configure)
+        self.canvas.bind("<MouseWheel>", self._on_mouse_wheel)
+        self.tab_container.bind("<MouseWheel>", self._on_mouse_wheel)
+
+    def add(self, child, text=""):
+        tab_id = str(child)
+        self._tabs[tab_id] = child
+        child.pack_forget()
+
+        button = ttk.Radiobutton(self.tab_container,
+            text=text,
+            variable=self._selected_var,
+            value=tab_id,
+            command=self._on_tab_select,
+            style="WrappingTab.TButton"
+        )
+        button.pack(side="left", padx=1, pady=0)
+        button.bind("<MouseWheel>", self._on_mouse_wheel)
+
+        if not self._selected_var.get():
+            button.invoke()
+
+    def _on_tab_select(self):
+        selected_id = self._selected_var.get()
+        for tab_id, child in self._tabs.items():
+            if tab_id == selected_id:
+                child.pack(in_=self._content_container, fill="both", expand=True, padx=2, pady=2)
+            else:
+                child.pack_forget()
+
+    def _on_frame_configure(self, event=None):
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        self.canvas.config(height=self.tab_container.winfo_reqheight())
+
+    def _on_mouse_wheel(self, event):
+        if sys.platform == "win32":
+            self.canvas.xview_scroll(-1 * (event.delta // 120), "units")
+        elif sys.platform == "darwin":
+            self.canvas.xview_scroll(event.delta, "units")
+        else: # Linux
+            if event.num == 4:
+                self.canvas.xview_scroll(-1, "units")
+            elif event.num == 5:
+                self.canvas.xview_scroll(1, "units")
+
 class DisassemblerApp(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -70,10 +141,10 @@ class DisassemblerApp(tk.Tk):
         self.main_pane = tk.PanedWindow(self, orient=tk.HORIZONTAL, sashrelief=tk.RAISED)
         self.main_pane.pack(expand=True, fill=tk.BOTH, padx=5, pady=5)
 
-        left_notebook = ttk.Notebook(self.main_pane)
+        self.left_notebook = ScrollableNotebook(self.main_pane)
 
-        functions_tab = ttk.Frame(left_notebook)
-        left_notebook.add(functions_tab, text=_("functions_tab"))
+        functions_tab = ttk.Frame(self.left_notebook) # This frame will be added to the notebook
+        self.left_notebook.add(functions_tab, text=_("functions_tab"))
 
         self.functions_tree = ttk.Treeview(functions_tab, show="tree headings", columns=("name",))
         self.functions_tree.heading("#0", text=_("address_col"))
@@ -86,14 +157,14 @@ class DisassemblerApp(tk.Tk):
         self.function_context_menu = tk.Menu(self, tearoff=0)
         self.function_context_menu.add_command(label=_("rename_menu"), command=self._rename_function)
 
-        blocks_tab = ttk.Frame(left_notebook)
-        left_notebook.add(blocks_tab, text=_("blocks_tab"))
+        blocks_tab = ttk.Frame(self.left_notebook)
+        self.left_notebook.add(blocks_tab, text=_("blocks_tab"))
         self.blocks_tree = ttk.Treeview(blocks_tab, show="tree")
         self.blocks_tree.pack(expand=True, fill=tk.BOTH)
         self.blocks_tree.bind("<Double-1>", self._on_basic_block_select)
 
-        classes_tab = ttk.Frame(left_notebook)
-        left_notebook.add(classes_tab, text=_("classes_tab"))
+        classes_tab = ttk.Frame(self.left_notebook)
+        self.left_notebook.add(classes_tab, text=_("classes_tab"))
 
         self.classes_tree = ttk.Treeview(classes_tab, show="tree headings", columns=("address",))
         self.classes_tree.heading("#0", text=_("class_name_col"))
@@ -104,8 +175,8 @@ class DisassemblerApp(tk.Tk):
         self.classes_tree.bind("<<TreeviewSelect>>", self._on_class_select)
 
         
-        variables_tab = ttk.Frame(left_notebook)
-        left_notebook.add(variables_tab, text=_("variables_tab"))
+        variables_tab = ttk.Frame(self.left_notebook)
+        self.left_notebook.add(variables_tab, text=_("variables_tab"))
 
         self.variables_tree = ttk.Treeview(variables_tab, show="headings", columns=("address", "type", "value"))
         self.variables_tree.heading("address", text=_("address_col"))
@@ -117,15 +188,15 @@ class DisassemblerApp(tk.Tk):
         self.variables_tree.pack(expand=True, fill=tk.BOTH)
         self.variables_tree.bind("<Double-1>", self._on_variable_select)
 
-        info_tab = ttk.Frame(left_notebook)
-        left_notebook.add(info_tab, text=_("info_tab"))
+        info_tab = ttk.Frame(self.left_notebook)
+        self.left_notebook.add(info_tab, text=_("info_tab"))
         
         self.info_text_area = scrolledtext.ScrolledText(info_tab, wrap=tk.WORD, relief=tk.FLAT, bd=0)
         self.info_text_area.pack(expand=True, fill=tk.BOTH, padx=2, pady=2)
         self.info_text_area.config(state=tk.DISABLED)
 
-        imports_main_tab = ttk.Frame(left_notebook)
-        left_notebook.add(imports_main_tab, text=_("imports_tab"))
+        imports_main_tab = ttk.Frame(self.left_notebook)
+        self.left_notebook.add(imports_main_tab, text=_("imports_tab"))
 
         imp_exp_notebook = ttk.Notebook(imports_main_tab)
         imp_exp_notebook.pack(expand=True, fill=tk.BOTH)
@@ -142,8 +213,8 @@ class DisassemblerApp(tk.Tk):
         self.exports_tree.heading("#0", text=_("addr_name_col"))
         self.exports_tree.pack(expand=True, fill=tk.BOTH)
 
-        explorer_tab = ttk.Frame(left_notebook)
-        left_notebook.add(explorer_tab, text=_("explorer_tab"))
+        explorer_tab = ttk.Frame(self.left_notebook)
+        self.left_notebook.add(explorer_tab, text=_("explorer_tab"))
         self.explorer_tree = ttk.Treeview(explorer_tab, show="tree")
         self.explorer_context_menu = tk.Menu(self, tearoff=0)
         self.explorer_context_menu.add_command(label=_("extract_menu"), command=self._export_from_explorer, state=tk.DISABLED)
@@ -153,7 +224,7 @@ class DisassemblerApp(tk.Tk):
 
         self.explorer_tree.pack(expand=True, fill=tk.BOTH)
 
-        self.main_pane.add(left_notebook, width=300, minsize=200)
+        self.main_pane.add(self.left_notebook, width=300, minsize=200)
         self._create_right_panel()
 
         all_regs = [
@@ -246,6 +317,19 @@ class DisassemblerApp(tk.Tk):
         style.configure("Treeview.Heading", background=colors["tree_heading_bg"], foreground=colors["fg"], relief="flat")
         style.map("Treeview.Heading", relief=[('active','groove'),('pressed','sunken')])
 
+        style.configure("Content.TFrame", background=colors["widget_bg"], relief="sunken", borderwidth=1)
+
+        style.configure("WrappingTab.TButton",
+            padding=[8, 4],
+            relief="flat",
+            background=colors["widget_bg"],
+            foreground=colors["fg"]
+        )
+        style.map("WrappingTab.TButton",
+            background=[('selected', colors["bg"]), ('active', colors["select_bg"])]
+        )
+
+        self.left_notebook.canvas.config(bg=colors["bg"])
         self.main_pane.config(bg=colors["bg"], sashrelief=tk.FLAT)
         for text_widget in [self.text_area, self.info_text_area]:
             text_widget.config(background=colors["widget_bg"], foreground=colors["fg"], insertbackground=colors["cursor"], selectbackground=colors["select_bg"])

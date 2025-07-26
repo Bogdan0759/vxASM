@@ -4,18 +4,14 @@ from .instruction import Instruction
 from .x86_opcodes import Prefixes
 
 class Disassembler:
-    """
-    Основной класс дизассемблера, который преобразует байт-код в список инструкций.
-    """
+    
     def __init__(self, bytecode: bytes, base_address: int = 0):
         self.bytecode = bytecode
         self.offset = 0
         self.base_address = base_address
 
     def disassemble(self) -> list[Instruction]:
-        """
-        Главный метод, который выполняет дизассемблирование всего байт-кода.
-        """
+        
         instructions = []
         while self.offset < len(self.bytecode):
             
@@ -26,7 +22,7 @@ class Disassembler:
         return instructions
 
     def _decode_one(self) -> Instruction:
-        """Декодирует одну инструкцию в текущем смещении."""
+        
         address = self.base_address + self.offset
 
         
@@ -88,7 +84,7 @@ class Disassembler:
         return Instruction(address, size, "db", operands, bytes_slice)
 
     def _parse_prefixes(self) -> Prefixes:
-        """Разбирает все префиксы инструкции в правильном порядке."""
+        
         p = Prefixes()
         temp_offset = 0
 

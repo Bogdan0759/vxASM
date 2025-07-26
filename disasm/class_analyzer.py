@@ -26,7 +26,7 @@ except ImportError:
 
 @dataclasses.dataclass
 class FoundClass:
-    """Представляет C++ класс, найденный в бинарном файле (вероятно, через vtable)."""
+    
     vtable_address: int
     name: str
     methods: List[int]  
@@ -35,12 +35,7 @@ class FoundClass:
     is_stub: bool = False
 
 def _demangle_msvc_name(mangled_name: str) -> str:
-    """
-    Выполняет очень простое деманглирование имен C++ из MSVC.
-    Примеры:
-    - '.?AVMyClass@@' -> 'MyClass'
-    - '.?AVMyNamespace@MyClass@@' -> 'MyNamespace::MyClass'
-    """
+    
     if mangled_name.startswith('.?A'):  
         
         if '@@' in mangled_name:
@@ -54,7 +49,7 @@ def _demangle_msvc_name(mangled_name: str) -> str:
     return mangled_name
 
 def _demangle_itanium_name(mangled_name: str) -> str:
-    """Деманглирует имена C++ Itanium ABI (GCC/Clang) с помощью cxxfilt."""
+    
     if not cxxfilt:
         
         if mangled_name.startswith('_ZTS'):
@@ -67,24 +62,20 @@ def _demangle_itanium_name(mangled_name: str) -> str:
         return mangled_name 
 
 def is_dotnet_assembly(pe: "pefile.PE") -> bool:
-    """Проверяет, является ли PE-файл сборкой .NET."""
+    
     if not pe or not pefile:
         return False
     return hasattr(pe, 'DIRECTORY_ENTRY_COM_DESCRIPTOR') and pe.DIRECTORY_ENTRY_COM_DESCRIPTOR.struct.VirtualAddress != 0
 
 def _is_pyinstaller_packed(pe: "pefile.PE") -> bool:
-    """Проверяет, упакован ли PE-файл с помощью PyInstaller, по наличию магической последовательности."""
+    
     if not pe:
         return False
     
     return b'MEI\x0c\x0b\x0a\x0b\x0e' in pe.__data__
 
 def _find_dotnet_stubs(pe: "pefile.PE") -> List[int]:
-    """
-    Ищет JMP-заглушки, характерные для .NET, в секции .text.
-    Это эвристика для обнаружения точек входа в JIT-компилируемые методы.
-    Ищет паттерн: FF 25 xx xx xx xx (jmp dword ptr [imm32])
-    """
+
     if not pe:
         return []
 
@@ -106,9 +97,7 @@ def _find_dotnet_stubs(pe: "pefile.PE") -> List[int]:
     return sorted(stubs)
 
 def _find_dotnet_classes_with_dnfile(pe: "pefile.PE") -> Optional[List[FoundClass]]:
-    """
-    Анализирует сборку .NET с помощью dnfile для извлечения классов и методов.
-    """
+    
     if not dnfile:
         return None
 
@@ -183,10 +172,7 @@ def _find_dotnet_classes_with_dnfile(pe: "pefile.PE") -> Optional[List[FoundClas
     return [cls for cls in found_classes_map.values() if cls.methods]
 
 def _find_msvc_classes(pe: "pefile.PE") -> List[FoundClass]: 
-    """
-    Анализирует PE-файл для поиска классов C++ по RTTI от MSVC.
-    Работает "снизу-вверх": находит имена -> дескрипторы типов -> локаторы -> vtables.
-    """
+    
     if not pe or not pefile:
         return []
 
@@ -326,7 +312,7 @@ def _find_msvc_classes(pe: "pefile.PE") -> List[FoundClass]:
     return sorted(list(found_classes_dict.values()), key=lambda c: c.vtable_address)
 
 def _find_itanium_classes(pe: "pefile.PE") -> List[FoundClass]:
-    """Анализирует PE-файл на наличие классов C++ по RTTI Itanium ABI (GCC/Clang)."""
+    
     image_base = pe.OPTIONAL_HEADER.ImageBase
     is_64bit = pe.FILE_HEADER.Machine == pefile.MACHINE_TYPE['IMAGE_FILE_MACHINE_AMD64']
     pointer_size = 8 if is_64bit else 4
@@ -432,10 +418,7 @@ def _find_itanium_classes(pe: "pefile.PE") -> List[FoundClass]:
     return sorted(found_classes, key=lambda c: c.vtable_address)
 
 def find_classes(pe: "pefile.PE", file_info: Optional["FileInfo"] = None) -> List[FoundClass]:
-    """
-    Анализирует PE-файл для поиска классов C++ путем сканирования RTTI,
-    а также определяет сборки .NET и PyInstaller.
-    """
+    
     if not pe or not pefile:
         return []
 

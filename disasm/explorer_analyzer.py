@@ -16,7 +16,7 @@ except ImportError:
     pefile = None
 @dataclasses.dataclass
 class ExplorerNode:
-    """Представляет узел в дереве структуры файла."""
+    
     name: str
     node_type: str  
     size: int = 0
@@ -25,7 +25,7 @@ class ExplorerNode:
     children: List['ExplorerNode'] = dataclasses.field(default_factory=list)
 
 def calculate_entropy(data: bytes) -> float:
-    """Вычисляет энтропию Шеннона для строки байтов."""
+    
     if not data:
         return 0.0
     
@@ -44,9 +44,7 @@ def calculate_entropy(data: bytes) -> float:
     return entropy
 
 def _parse_pyinstaller_archive(pe: "pefile.PE") -> Optional[ExplorerNode]:
-    """
-    Парсит архив PyInstaller и возвращает его файловую структуру в виде дерева ExplorerNode.
-    """
+    
     try:
         magic = b'MEI\x0c\x0b\x0a\x0b\x0e'
         
@@ -105,7 +103,7 @@ def _parse_pyinstaller_archive(pe: "pefile.PE") -> Optional[ExplorerNode]:
         return None
 
 def _analyze_upx(pe: "pefile.PE", file_info: Optional["FileInfo"] = None) -> Optional[ExplorerNode]:
-    """Анализирует файл на наличие признаков упаковщика UPX."""
+    
     if file_info and "UPX" in file_info.packer:
         return ExplorerNode(name="UPX Packed File", node_type='directory')
     
@@ -117,7 +115,7 @@ def _analyze_upx(pe: "pefile.PE", file_info: Optional["FileInfo"] = None) -> Opt
 
 
 def _analyze_other_packers(pe: "pefile.PE") -> Optional[ExplorerNode]:
-    """Анализирует файл на наличие признаков других популярных упаковщиков."""
+    
     
     aspack_sections = [s.Name.decode(errors='ignore').strip('\x00') for s in pe.sections if s.Name.startswith(b'.aspack') or s.Name.startswith(b'.adata')]
     if aspack_sections:
@@ -136,7 +134,7 @@ def _analyze_other_packers(pe: "pefile.PE") -> Optional[ExplorerNode]:
     return None
 
 def _parse_pe_headers(pe: "pefile.PE") -> Optional[ExplorerNode]:
-    """Создает узел, представляющий заголовки PE-файла."""
+    
     if not hasattr(pe, 'OPTIONAL_HEADER') or not hasattr(pe, 'FILE_HEADER'):
         return None
 
@@ -167,7 +165,7 @@ def _parse_pe_headers(pe: "pefile.PE") -> Optional[ExplorerNode]:
     return headers_root
 
 def _parse_resources(pe: "pefile.PE") -> Optional[ExplorerNode]:
-    """Парсит директорию ресурсов и представляет ее в виде дерева."""
+    
     if not hasattr(pe, 'DIRECTORY_ENTRY_RESOURCE'):
         return None
 
@@ -219,7 +217,7 @@ def _parse_resources(pe: "pefile.PE") -> Optional[ExplorerNode]:
     return resources_root if resources_root.children else None
 
 def _build_generic_pe_view(pe: "pefile.PE") -> Optional[ExplorerNode]:
-    """Создает детальное представление структуры PE-файла, включая заголовки, ресурсы, секции и оверлей."""
+    
     root = ExplorerNode(name="PE Structure", node_type='directory')
     has_content = False
 
@@ -268,11 +266,7 @@ def _build_generic_pe_view(pe: "pefile.PE") -> Optional[ExplorerNode]:
 
     return root if has_content else None
 def analyze_structure(pe: "pefile.PE", file_info: Optional["FileInfo"] = None) -> Optional[ExplorerNode]:
-    """
-    Анализирует внутреннюю структуру PE-файла, запуская цепочку анализаторов.
-    Поддерживает PyInstaller, различные упаковщики, а также предоставляет
-    детальное представление стандартной структуры PE.
-    """
+    
     if not pe:
         return None
         
